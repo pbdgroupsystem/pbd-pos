@@ -33,9 +33,12 @@ const S = {
   data: store.get('data', null),
   loc: store.get('loc', ''),
   cart: store.get('cart', []),
+  customers: store.get('customers', []),
+  cartCust: store.get('cartCust', ''),
   bills: store.get('bills', []),
   shifts: store.get('shifts', []),
-  prn: Object.assign({ mode: 'none', paper: 58, auto: false, chunk: 100 }, store.get('prn', {})),
+  prn: Object.assign({ mode: /Android/i.test(navigator.userAgent) ? 'rawbt' : 'share', paper: 58, auto: false, chunk: 100 },
+    store.get('prn', {})),
   device: store.get('device', ''),
   view: 'sell', cat: '', q: '',
   syncing: false, authLost: false, report: null, installEvt: null
@@ -123,6 +126,12 @@ function applyData(j, t0) {
   };
   store.set('data', S.data);
   if (j.user && S.session) { S.session.user = j.user; store.set('session', S.session); }
+  if (j.customers) {
+    const dirty = S.customers.filter((c) => c.dirty);
+    const ids = new Set(dirty.map((c) => c.id));
+    S.customers = dirty.concat(j.customers.filter((c) => !ids.has(c.id)));
+    saveCustomers();
+  }
   if (!S.data.locations.some((l) => l.id === S.loc)) {
     S.loc = (S.data.locations[0] || {}).id || '';
     store.set('loc', S.loc);
@@ -152,12 +161,18 @@ async function syncNow(manual) {
   if (!navigator.onLine) { if (manual) toast('ยังไม่มีอินเทอร์เน็ต บิลเก็บไว้ในเครื่องแล้ว'); return; }
   S.syncing = true; renderBadge();
   try {
+    const dc = S.customers.filter((c) => c.dirty && mine(c.loc));
+    if (dc.length) {
+      const j = await api('syncCustomers', { customers: dc });
+      j.results.forEach((r) => { const c = custById(r.id); if (c && r.ok) delete c.dirty; else if (c) c.err = r.error; });
+      saveCustomers();
+    }
     const pend = pendingBills();
     for (let i = 0; i < pend.length; i += 25) {
       const batch = pend.slice(i, i + 25).map((b) => ({
         id: b.id, loc: b.loc, createdAt: b.createdAt, sellerId: b.sellerId, sellerName: b.sellerName, device: b.device,
         shiftId: b.shiftId, lines: b.lines, discount: b.discount, method: b.method, cash: b.cash, change: b.change, note: b.note,
-        customer: b.customer || '', type: b.type || 'SALE'
+        customer: b.customer || '', customerId: b.customerId || '', type: b.type || 'SALE'
       }));
       const j = await api('syncBills', { bills: batch });
       j.results.forEach((r) => {
@@ -213,6 +228,7 @@ async function startLogin() {
     const j = await api('login', { idToken });
     if (S.session && S.session.user && S.session.user.id !== j.user.id) {
       S.cart = S.cart.filter((l) => !isCollect(l)); saveCart(); S.report = null;
+      S.customers = S.customers.filter((c) => c.dirty); setCartCust('');
     }
     S.session = { token: j.token, user: j.user };
     store.set('session', S.session);
@@ -234,6 +250,7 @@ function logout() {
   // ล้างข้อมูลลูกค้าที่แคชไว้ ให้คนถัดไปที่ล็อกอินเห็นเฉพาะของสาขาตัวเอง
   if (S.data) { S.data.outstanding = []; S.data.outAt = 0; store.set('data', S.data); }
   S.cart = S.cart.filter((l) => !isCollect(l)); saveCart();
+  S.customers = S.customers.filter((c) => c.dirty); saveCustomers(); setCartCust('');
   S.report = null;
   try { if (typeof liff !== 'undefined' && liff.isLoggedIn && liff.isLoggedIn()) liff.logout(); } catch (x) {}
   showLogin();
@@ -285,42 +302,25 @@ function cartChanged() {
   if (S.view === 'sell') renderGrid();
 }
 
-function addPlanLine(it, plan) {
-  const inst = plan.kind === 'inst';
-  const due = inst ? plan.down : plan.total;
-  const stage = inst ? 'down' : 'full';
-  const p = { id: plan.id || '', name: plan.name || '', kind: plan.kind, total: plan.total, down: plan.down || 0,
-    inst: plan.inst || 0, n: plan.n || 0, units: plan.units || 1 };
-  const same = S.cart.find((l) => !isCollect(l) && l.id === it.id && l.plan.id === p.id && l.plan.total === p.total &&
-    l.stage === stage && l.due === due && l.price === due);
-  if (same) same.qty++;
-  else S.cart.push({ key: randomId(6), id: it.id, name: it.name, plan: p, stage, due, price: due, qty: 1 });
-  if (navigator.vibrate) navigator.vibrate(25);
-  toast('+ ' + it.name + (inst ? ' · ดาวน์ ' + baht(due) : ''));
-  cartChanged();
-}
+/* ----- ขั้นตอนเหมือน Loyverse: สินค้า › แบบการขาย › ตัวเลือก + จำนวน + ความคิดเห็น › กรอกราคาขายเอง ----- */
+const STAGES_OF = (kind) => (kind === 'inst' ? ['down', 'splitDown', 'collectDown'] : ['full', 'collect']);
+const planOf = (p) => ({ id: p.id || '', name: p.name || '', kind: p.kind, total: p.total || 0, down: p.down || 0,
+  inst: p.inst || 0, n: p.n || 0, units: p.units || 1 });
 
 function addToCart(it) {
   const ps = plansOf(it);
-  if (!ps.length) {
-    const v = prompt(`ระบุราคาขายสด: ${it.name}`, '');
-    if (v == null) return;
-    const p = r2(parseFloat(String(v).replace(/,/g, '')));
-    if (!(p > 0)) return toast('ราคาไม่ถูกต้อง', true);
-    return addPlanLine(it, { id: '', kind: 'cash', total: p, units: 1 });
-  }
-  if (ps.length === 1) return addPlanLine(it, ps[0]);
-  pickPlan(it, ps, (p) => addPlanLine(it, p));
+  if (!ps.length) return openVariant(it, { id: '', kind: 'cash', total: 0, units: 1 });
+  if (ps.length === 1) return openVariant(it, ps[0]);
+  pickPlan(it, ps, (p) => openVariant(it, p));
 }
 
 function pickPlan(it, ps, cb) {
   const el = sheet(`${head(it.name)}<div class="mut small">เลือกแบบการขาย</div><div class="list">${ps.map((p, i) => `
     <button class="li" data-pi="${i}" style="width:100%;text-align:left">
       <span class="tag ${p.kind === 'inst' ? 'wait' : 'ok'}">${p.kind === 'inst' ? 'ผ่อน' : 'สด'}</span>
-      <span class="sp">${esc(planLabel(p))}</span>
-      <span style="text-align:right"><span class="num">${baht(p.kind === 'inst' ? p.down : p.total)}</span><br><span class="mut small">${p.kind === 'inst' ? 'ดาวน์' : 'จ่ายวันนี้'}</span></span>
+      <span class="sp">${esc(planLabel(p))}</span><span class="mut">›</span>
     </button>`).join('')}</div>`);
-  $$('[data-pi]', el).forEach((b) => { b.onclick = () => { closeSheet(); cb(ps[+b.dataset.pi]); }; });
+  $$('[data-pi]', el).forEach((b) => { b.onclick = () => cb(ps[+b.dataset.pi]); });
 }
 
 function onCode(code) {
@@ -329,71 +329,152 @@ function onCode(code) {
   else { toast('ไม่พบสินค้า: ' + code, true); S.q = code; if (S.view === 'sell') render(); }
 }
 
-/* ----- แก้รายการในตะกร้า: ตัวเลือกการชำระ / ราคา / รับวันนี้ ----- */
-function editLine(idx, after) {
+/** หน้าตัวเลือก (ตัวแปร) — edit = index ของรายการในตะกร้าที่กำลังแก้ */
+function openVariant(it, plan, edit) {
+  const cur = edit != null ? S.cart[edit] : null;
+  const st = { qty: cur ? cur.qty : 1, comment: cur ? cur.comment || '' : '' };
+  const p = planOf(plan);
+  const el = sheet(`${head(it.name)}
+    <div class="mut small">${esc(planLabel(p) || 'ไม่มีราคาตั้งไว้ — กรอกราคาขายเอง')}</div>
+    <label class="f" style="color:var(--ok)">ตัวเลือก</label>
+    <div class="list">${STAGES_OF(p.kind).map((s) => `
+      <button class="li" data-vs="${s}" style="width:100%;text-align:left;border:1px solid ${cur && cur.stage === s ? 'var(--red)' : 'var(--line)'};border-radius:12px;padding:14px;margin-bottom:8px">
+        <span class="sp" style="font-size:16px">${STAGE[s]}</span>
+        <span class="mut small">${s === 'down' ? 'ดาวน์ ' + baht(p.down) : s === 'full' && p.total ? baht(p.total) : s === 'collect' || s === 'collectDown' ? 'เลือกบิลที่ค้าง' : ''}</span>
+      </button>`).join('')}</div>
+    <div id="qtyBox"><label class="f" style="color:var(--ok)">จำนวน</label>
+      <div class="row"><button class="btn" id="vm" style="width:56px">−</button><div class="sp num" id="vq" style="text-align:center;font-size:20px"></div><button class="btn" id="vp" style="width:56px">+</button></div></div>
+    <label class="f" style="color:var(--ok)">ความคิดเห็น</label><input class="inp" id="vc" maxlength="120" placeholder="ใส่ข้อคิดเห็น" value="${esc(st.comment)}">
+    ${cur && !isCollect(cur) ? `<button class="btn block" id="vkeep" style="margin-top:12px">บันทึก (ราคาเดิม ${baht(cur.price)})</button>` : ''}`);
+  const drawQty = () => { $('#vq', el).textContent = st.qty; };
+  $('#vm', el).onclick = () => { if (st.qty > 1) { st.qty--; drawQty(); } };
+  $('#vp', el).onclick = () => { st.qty++; drawQty(); };
+  drawQty();
+  const comment = () => $('#vc', el).value.trim();
+  const keep = $('#vkeep', el);
+  if (keep) keep.onclick = () => { Object.assign(cur, { qty: st.qty, comment: comment() }); cartChanged(); closeSheet(); openCart(); };
+  $$('[data-vs]', el).forEach((b) => {
+    b.onclick = () => {
+      const stage = b.dataset.vs;
+      const base = { it, plan: p, qty: st.qty, comment: comment(), edit };
+      if (stage === 'collect' || stage === 'collectDown') return pickOutstanding(Object.assign(base, { stage }));
+      askAmount(Object.assign(base, { stage }));
+    };
+  });
+}
+
+/** เก็บเพิ่ม / เก็บเงินดาวน์เพิ่ม จากหน้าสินค้า: เลือกบิลที่ค้างของสินค้านี้ หรือบิลที่ขายใน Loyverse */
+function pickOutstanding(o) {
+  const kind = o.stage === 'collectDown' ? 'inst' : 'cash';
+  const list = outstandingList().filter((x) => x.itemId === o.it.id && x.kind === kind);
+  const el = sheet(`${head(STAGE[o.stage] + ' · ' + o.it.name)}
+    <div class="list">${list.map((x, i) => `<button class="li" data-ob="${i}" style="width:100%;text-align:left"><div class="sp">
+      <div>${esc(x.customer || '(ไม่ระบุลูกค้า)')}</div><div class="mut small">${esc(x.bill)} · ${esc(x.date)} · ${esc(locName(x.loc))}</div></div>
+      <div class="num">ค้าง ${baht(x.balance)}</div></button>`).join('') || '<div class="mut" style="padding:10px 0">ไม่มีบิลค้างของสินค้านี้ในระบบ</div>'}</div>
+    <button class="btn block" id="olv" style="margin-top:10px">บิลที่ขายใน Loyverse / ไม่มีในระบบ</button>`);
+  $$('[data-ob]', el).forEach((b) => {
+    b.onclick = () => {
+      const x = list[+b.dataset.ob];
+      askAmount(Object.assign({}, o, { qty: 1, ref: x, max: x.balance }));
+    };
+  });
+  $('#olv', el).onclick = () => {
+    const r = prompt('เลขใบเสร็จ Loyverse (ถ้ามี)', '');
+    if (r == null) return;
+    askAmount(Object.assign({}, o, { qty: 1, ref: { bill: 'LV-' + (r.trim().replace(/[^A-Za-z0-9.\-]/g, '') || 'ไม่ระบุ'), line: 0 } }));
+  };
+}
+
+/** แป้นตัวเลข "ราคาขาย" — กรอกเอง เริ่มจาก 0 */
+function keypad(title, label, hints, onOk) {
+  let v = '';
+  const el = sheet(`${head(title)}
+    <div class="mut">${esc(label)}</div>
+    <div class="row" style="margin:6px 0 10px"><div class="sp num" id="kd" style="font-size:40px"></div><button class="btn" id="kb" aria-label="ลบ">⌫</button></div>
+    ${hints.length ? `<div class="row" style="flex-wrap:wrap;gap:6px;margin-bottom:10px">${hints.map((h, i) => `<button class="chip" data-h="${i}">${esc(h.label)}</button>`).join('')}</div>` : ''}
+    <div class="kp">${['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0'].map((k) => `<button data-k="${k}">${k}</button>`).join('')}
+      <button id="kok" class="ok">ตกลง</button></div>`);
+  const draw = () => {
+    const n = parseFloat(v || '0');
+    $('#kd', el).textContent = '฿' + n.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+  $$('[data-k]', el).forEach((b) => {
+    b.onclick = () => {
+      const k = b.dataset.k;
+      if (k === '.' && v.includes('.')) return;
+      if (v.includes('.') && v.split('.')[1].length >= 2) return;
+      if (v.replace('.', '').length >= 9) return;
+      v = v === '0' && k !== '.' ? k : v + k;
+      draw();
+    };
+  });
+  $('#kb', el).onclick = () => { v = v.slice(0, -1); draw(); };
+  $$('[data-h]', el).forEach((b) => { b.onclick = () => { v = String(hints[+b.dataset.h].value); draw(); }; });
+  $('#kok', el).onclick = () => onOk(r2(parseFloat(v || '0')));
+  draw();
+}
+
+function askAmount(o) {
+  const p = o.plan, col = o.stage === 'collect' || o.stage === 'collectDown';
+  const hints = [];
+  if (o.stage === 'full' && p.total) hints.push({ label: 'ราคาเต็ม ' + baht(p.total), value: p.total });
+  if (o.stage === 'down' && p.down) hints.push({ label: 'ดาวน์ ' + baht(p.down), value: p.down });
+  if (o.stage === 'splitDown') { hints.push({ label: baht(500), value: 500 }); if (p.down) hints.push({ label: 'ดาวน์เต็ม ' + baht(p.down), value: p.down }); }
+  if (col && o.max) hints.push({ label: 'ค้างทั้งหมด ' + baht(o.max), value: o.max });
+  const label = 'ราคาขาย' + (col ? (o.max ? ` (ค้าง ${baht(o.max)})` : '') : o.qty > 1 ? ' ต่อชิ้น' : '');
+  keypad(`${o.it.name} · ${STAGE[o.stage]}`, label, hints, (amt) => {
+    if (!(amt > 0)) return toast('กรอกจำนวนเงิน', true);
+    if (col && o.max && amt > o.max + 0.001) return toast('เกินยอดค้าง ' + baht(o.max), true);
+    if (o.stage === 'splitDown' && p.down && amt >= p.down) {
+      toast('รับเท่ายอดดาวน์ → บันทึกเป็นดาวน์เต็ม');
+      return putLine(o, 'down', amt, amt);
+    }
+    if (o.stage === 'full' && p.total && amt < p.total) {
+      // จ่ายน้อยกว่าราคาเต็ม: ลดราคา หรือ ค้างเก็บเพิ่ม
+      const el = sheet(`${head('รับ ' + baht(amt) + ' จากราคาเต็ม ' + baht(p.total))}
+        <button class="btn block" id="dsc" style="margin-bottom:8px">ลดราคา — ขายที่ ${baht(amt)} (ไม่ค้าง)</button>
+        <button class="btn pri block" id="bal">ค้างเก็บเพิ่ม ${baht((p.total - amt) * o.qty)} (มัดจำ/จ่ายบางส่วน)</button>`);
+      $('#dsc', el).onclick = () => putLine(o, 'full', amt, amt);
+      $('#bal', el).onclick = () => putLine(o, 'full', p.total, amt);
+      return;
+    }
+    if (o.stage === 'splitDown') return putLine(o, 'splitDown', p.down || amt, amt);
+    if (col) return putLine(o, o.stage, o.max || amt, amt);
+    putLine(o, o.stage, amt, amt); // full (ราคาเต็มหรือสูงกว่า) / down
+  });
+}
+
+function putLine(o, stage, due, price) {
+  const col = stage === 'collect' || stage === 'collectDown';
+  const line = {
+    key: randomId(6), id: o.it.id, name: o.it.name, plan: planOf(o.plan), stage,
+    due: r2(due), price: r2(price), qty: col ? 1 : o.qty, comment: o.comment || ''
+  };
+  if (col) {
+    line.refBill = o.ref ? o.ref.bill : ''; line.refLine = o.ref ? o.ref.line : 0;
+    line.customer = o.ref ? o.ref.customer || '' : '';
+    if (o.ref && o.ref.customerId && custById(o.ref.customerId)) setCartCust(o.ref.customerId);
+  }
+  if (o.edit != null && S.cart[o.edit]) S.cart[o.edit] = Object.assign(line, { key: S.cart[o.edit].key });
+  else S.cart.push(line);
+  if (navigator.vibrate) navigator.vibrate(25);
+  cartChanged();
+  closeSheet();
+  if (o.edit != null) openCart();
+  else toast(`+ ${o.it.name} · ${STAGE[stage]} ${baht(price)}`);
+}
+
+/** แตะรายการในตะกร้า → กลับไปหน้าตัวเลือกของสินค้านั้น */
+function editLine(idx) {
   const l = S.cart[idx];
   if (!l) return;
-  const inst = l.plan.kind === 'inst', col = isCollect(l);
-  const st = { stage: l.stage, due: l.due, price: l.price, qty: l.qty, partial: !inst && !col && l.price < l.due };
-  const el = sheet(`${head(l.name)}
-    <div class="mut small">${esc(planLabel(l.plan))}${col ? ' · ' + STAGE[l.stage] + ' · อ้างอิง ' + esc(l.refBill) : ''}</div>
-    ${col ? '' : `<div class="row" style="margin-top:10px"><span class="sp">จำนวน</span><div class="qty"><button id="qm">−</button><span id="qv"></span><button id="qp">+</button></div></div>`}
-    ${inst && !col ? `<div class="seg" style="grid-template-columns:1fr 1fr"><button data-st="down">ดาวน์เต็ม</button><button data-st="splitDown">แบ่งดาวน์</button></div>` : ''}
-    ${!inst && !col ? `<div class="seg" style="grid-template-columns:1fr"><button class="on">ชำระวันสั่งซื้อ</button></div>` : ''}
-    <div id="fx"></div>
-    <div class="total"><span>รับวันนี้</span><span class="num" id="lt"></span></div>
-    <div class="row mut small"><span class="sp">${inst ? 'ค้างดาวน์ (เก็บเงินดาวน์เพิ่ม)' : 'ค้างชำระ (เก็บเพิ่ม)'}</span><span class="num" id="lb"></span></div>
-    <div class="row" style="margin-top:12px"><button class="btn" id="rm">ลบรายการ</button><button class="btn pri sp" id="ok">ตกลง</button></div>`);
-  const fx = $('#fx', el);
-  const num = (x) => r2(parseFloat(x) || 0);
-  const sums = () => {
-    const q = col ? 1 : st.qty;
-    $('#lt', el).textContent = baht(st.price * q);
-    $('#lb', el).textContent = baht(col ? Math.max(0, l.due - st.price) : Math.max(0, st.due - st.price) * q);
-    if ($('#qv', el)) $('#qv', el).textContent = st.qty;
-  };
-  const draw = () => {
-    $$('[data-st]', el).forEach((b) => b.classList.toggle('on', b.dataset.st === st.stage));
-    if (col) {
-      fx.innerHTML = `<label class="f">ยอดที่เก็บ (ค้างอยู่ ${baht(l.due)})</label><input class="inp num" id="pp" type="number" inputmode="decimal" value="${st.price}">`;
-    } else if (inst) {
-      fx.innerHTML = `<label class="f">เงินดาวน์ต่อชิ้น (แผน ${baht(l.plan.down)})</label><input class="inp num" id="dd" type="number" inputmode="decimal" value="${st.due}">` +
-        (st.stage === 'splitDown' ? `<label class="f">รับดาวน์วันนี้ต่อชิ้น</label><input class="inp num" id="pp" type="number" inputmode="decimal" value="${st.price}">` : '');
-    } else {
-      fx.innerHTML = `<label class="f">ราคาขายต่อชิ้น หลังส่วนลด (ราคาเต็ม ${baht(l.plan.total)})</label><input class="inp num" id="dd" type="number" inputmode="decimal" value="${st.due}">
-        <label class="row" style="margin-top:10px"><input type="checkbox" id="pa" ${st.partial ? 'checked' : ''}><span>ลูกค้าจ่ายไม่ครบวันนี้ (เก็บเพิ่มภายหลัง)</span></label>` +
-        (st.partial ? `<label class="f">รับวันนี้ต่อชิ้น</label><input class="inp num" id="pp" type="number" inputmode="decimal" value="${st.price}">` : '');
-    }
-    const dd = $('#dd', fx), pp = $('#pp', fx), pa = $('#pa', fx);
-    if (dd) dd.oninput = () => { st.due = num(dd.value); if (!pp) st.price = st.due; sums(); };
-    if (pp) pp.oninput = () => { st.price = num(pp.value); sums(); };
-    if (pa) pa.onchange = () => { st.partial = pa.checked; st.price = st.partial ? Math.min(500, st.due) : st.due; draw(); };
-    sums();
-  };
-  $$('[data-st]', el).forEach((b) => {
-    b.onclick = () => { st.stage = b.dataset.st; st.price = st.stage === 'down' ? st.due : Math.min(500, st.due); draw(); };
-  });
-  if (!col) {
-    $('#qm', el).onclick = () => { if (st.qty > 1) { st.qty--; sums(); } };
-    $('#qp', el).onclick = () => { st.qty++; sums(); };
+  const it = items().find((x) => x.id === l.id) || { id: l.id, name: l.name };
+  if (isCollect(l)) {
+    const max = l.refBill && !/^LV-/.test(l.refBill) ? l.due : 0;
+    return askAmount({ it, plan: l.plan, stage: l.stage, qty: 1, comment: l.comment, edit: idx,
+      ref: { bill: l.refBill, line: l.refLine, customer: l.customer }, max });
   }
-  $('#rm', el).onclick = () => { S.cart.splice(idx, 1); cartChanged(); closeSheet(); if (after) after(); };
-  $('#ok', el).onclick = () => {
-    if (st.price < 0 || st.due < 0) return toast('ยอดไม่ถูกต้อง', true);
-    if (col) {
-      if (!(st.price > 0)) return toast('ใส่ยอดที่เก็บ', true);
-      if (st.price > l.due + 0.001) return toast('เก็บเกินยอดค้าง', true);
-    } else {
-      if (inst && !(st.due > 0)) return toast('ใส่เงินดาวน์', true);
-      if (st.price > st.due + 0.001) return toast('รับเงินเกินยอดที่ต้องชำระ', true);
-      if (inst && st.stage === 'splitDown' && st.price >= st.due) st.stage = 'down';
-      if (inst && st.stage === 'down') st.price = st.due;
-      if (!inst && !st.partial) st.price = st.due;
-    }
-    Object.assign(l, { stage: st.stage, due: st.due, price: st.price, qty: col ? 1 : st.qty });
-    cartChanged(); closeSheet(); if (after) after();
-  };
-  draw();
+  openVariant(it, l.plan, idx);
 }
 
 /* ----- เก็บเพิ่ม / เก็บเงินดาวน์เพิ่ม ----- */
@@ -410,7 +491,7 @@ function outstandingList() {
       const k = b.id + '|' + (i + 1);
       if (isCollect(l) || bal <= 0 || map.has(k)) return;
       map.set(k, { bill: b.id, line: i + 1, loc: b.loc, date: ymd(b.createdAt), itemId: l.id, name: l.name,
-        kind: l.plan.kind, plan: l.plan, balance: bal, customer: b.customer || '' });
+        kind: l.plan.kind, plan: l.plan, balance: bal, customer: b.customer || '', customerId: b.customerId || '' });
     });
   });
   const sub = (l) => { const o = map.get(l.refBill + '|' + l.refLine); if (o) o.balance = r2(o.balance - l.price); };
@@ -453,6 +534,7 @@ function addCollectLine(o) {
   S.cart.push({ key: randomId(6), id: o.itemId, name: o.name, plan: o.plan || { kind: o.kind },
     stage: o.kind === 'inst' ? 'collectDown' : 'collect', due: o.balance, price: p, qty: 1,
     refBill: o.bill, refLine: o.line, customer: o.customer || '' });
+  if (o.customerId && custById(o.customerId)) setCartCust(o.customerId);
   cartChanged(); closeSheet(); render();
   toast('เพิ่มรายการเก็บเงินแล้ว');
 }
@@ -558,7 +640,7 @@ function renderSell(v) {
     if (it) { q.value = ''; S.q = ''; addToCart(it); renderGrid(); }
     else toast('ไม่พบสินค้า: ' + code, true);
   };
-  $('#scanBtn', v).onclick = openScanner;
+  $('#scanBtn', v).onclick = () => openScanner();
   $('#colBtn', v).onclick = openCollect;
   $$('.chip', v).forEach((c) => { c.onclick = () => { S.cat = c.dataset.cat; render(); }; });
   const gs = $('#goShift', v);
@@ -596,7 +678,12 @@ function renderGrid() {
 
 function openCart() {
   if (!S.cart.length) return;
-  const el = sheet(`${head('ตะกร้า · ' + locName(S.loc))}<div class="mut small">แตะรายการเพื่อเปลี่ยนตัวเลือกการชำระ / ราคา / จำนวน</div>
+  const cc = custById(S.cartCust);
+  const el = sheet(`${head('ตะกร้า · ' + locName(S.loc))}
+    <button class="li" id="ccust" style="width:100%;text-align:left;border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:8px">
+      <span class="sp">${cc ? `<b>${esc(cc.name)}</b><br><span class="mut small">${esc([cc.phone, cc.province].filter(Boolean).join(' · '))}</span>` : '<span class="mut">+ เลือก / สร้างลูกค้า</span>'}</span>
+      ${cc ? '<span class="mut small">เปลี่ยน</span>' : ''}</button>
+    <div class="mut small">แตะรายการเพื่อเปลี่ยนตัวเลือกการชำระ / ราคา / จำนวน</div>
     <div class="list" id="cl"></div>
     <div class="total"><span>รับเงินวันนี้</span><span class="num" id="ct"></span></div>
     <div class="row mut" id="cbr"><span class="sp">ค้างเก็บภายหลัง</span><span class="num" id="cb"></span></div>
@@ -605,22 +692,127 @@ function openCart() {
     if (!S.cart.length) { closeSheet(); render(); return; }
     $('#cl', el).innerHTML = S.cart.map((l, i) => {
       const bal = lineBal(l);
-      return `<button class="li" data-e="${i}" style="width:100%;text-align:left"><div class="sp">
+      return `<div class="li"><button class="sp" data-e="${i}" style="text-align:left">
         <div>${esc(l.name)}${lineQty(l) > 1 ? ` <b>× ${l.qty}</b>` : ''}</div>
         <div class="mut small">${esc(planLabel(l.plan))}</div>
         <div class="small"><span class="tag ${isCollect(l) ? 'ok' : l.plan.kind === 'inst' ? 'wait' : 'ok'}">${STAGE[l.stage]}</span>
           ${isCollect(l) ? `<span class="mut">อ้างอิง ${esc(l.refBill)}</span>` : ''}
-          ${bal > 0 ? `<span style="color:var(--warn)">ค้าง ${baht(bal)}</span>` : ''}</div></div>
-        <div class="num" style="min-width:80px;text-align:right">${baht(lineQty(l) * l.price)}</div></button>`;
+          ${bal > 0 ? `<span style="color:var(--warn)">ค้าง ${baht(bal)}</span>` : ''}</div>
+          ${l.comment ? `<div class="mut small">💬 ${esc(l.comment)}</div>` : ''}</button>
+        <div class="num" style="min-width:76px;text-align:right">${baht(lineQty(l) * l.price)}</div>
+        <button class="x" data-x="${i}" aria-label="ลบรายการ" style="flex:none">×</button></div>`;
     }).join('');
     $('#ct', el).textContent = baht(cartTotal());
     $('#cb', el).textContent = baht(cartBalance());
     $('#cbr', el).classList.toggle('hidden', !cartBalance());
-    $$('[data-e]', el).forEach((b) => { b.onclick = () => editLine(+b.dataset.e, openCart); });
+    $$('[data-e]', el).forEach((b) => { b.onclick = () => editLine(+b.dataset.e); });
+    $$('[data-x]', el).forEach((b) => { b.onclick = () => { S.cart.splice(+b.dataset.x, 1); cartChanged(); draw(); }; });
   };
   draw();
-  $('#clr', el).onclick = () => { if (confirm('ล้างตะกร้าทั้งหมด?')) { S.cart = []; cartChanged(); closeSheet(); render(); } };
+  $('#ccust', el).onclick = () => openCustomers((c) => { setCartCust(c.id); openCart(); });
+  $('#clr', el).onclick = () => { if (confirm('ล้างตะกร้าทั้งหมด?')) { S.cart = []; setCartCust(''); cartChanged(); closeSheet(); render(); } };
   $('#pay', el).onclick = openPay;
+}
+
+/* ----- ลูกค้า (ช่องเดียวกับ Loyverse) ----- */
+const PROVINCES = ['กรุงเทพมหานคร', 'กระบี่', 'กาญจนบุรี', 'กาฬสินธุ์', 'กำแพงเพชร', 'ขอนแก่น', 'จันทบุรี', 'ฉะเชิงเทรา', 'ชลบุรี',
+  'ชัยนาท', 'ชัยภูมิ', 'ชุมพร', 'เชียงราย', 'เชียงใหม่', 'ตรัง', 'ตราด', 'ตาก', 'นครนายก', 'นครปฐม', 'นครพนม', 'นครราชสีมา',
+  'นครศรีธรรมราช', 'นครสวรรค์', 'นนทบุรี', 'นราธิวาส', 'น่าน', 'บึงกาฬ', 'บุรีรัมย์', 'ปทุมธานี', 'ประจวบคีรีขันธ์', 'ปราจีนบุรี',
+  'ปัตตานี', 'พระนครศรีอยุธยา', 'พะเยา', 'พังงา', 'พัทลุง', 'พิจิตร', 'พิษณุโลก', 'เพชรบุรี', 'เพชรบูรณ์', 'แพร่', 'ภูเก็ต',
+  'มหาสารคาม', 'มุกดาหาร', 'แม่ฮ่องสอน', 'ยโสธร', 'ยะลา', 'ร้อยเอ็ด', 'ระนอง', 'ระยอง', 'ราชบุรี', 'ลพบุรี', 'ลำปาง', 'ลำพูน',
+  'เลย', 'ศรีสะเกษ', 'สกลนคร', 'สงขลา', 'สตูล', 'สมุทรปราการ', 'สมุทรสงคราม', 'สมุทรสาคร', 'สระแก้ว', 'สระบุรี', 'สิงห์บุรี',
+  'สุโขทัย', 'สุพรรณบุรี', 'สุราษฎร์ธานี', 'สุรินทร์', 'หนองคาย', 'หนองบัวลำภู', 'อ่างทอง', 'อำนาจเจริญ', 'อุดรธานี', 'อุตรดิตถ์',
+  'อุทัยธานี', 'อุบลราชธานี'];
+const CUST_FIELDS = [
+  ['name', 'ชื่อลูกค้า *', 'text', 120], ['email', 'อีเมล', 'email', 120], ['phone', 'โทรศัพท์', 'tel', 20],
+  ['address', 'ที่อยู่', 'text', 300], ['district', 'เขต/อำเภอ', 'text', 80], ['province', 'จังหวัด', 'text', 80],
+  ['zip', 'รหัสไปรษณีย์', 'text', 5], ['country', 'ประเทศ', 'text', 60], ['code', 'รหัสลูกค้า', 'text', 60],
+  ['note', 'หมายเหตุ', 'text', 300]
+];
+const myCustomers = () => S.customers.filter((c) => mine(c.loc));
+const custById = (id) => S.customers.find((c) => c.id === id) || null;
+const custLabel = (c) => (c ? c.name + (c.phone ? ' · ' + c.phone : '') : '');
+const custAddr = (c) => (c ? [c.address, c.district, c.province, c.zip].filter(Boolean).join(' ') : '');
+function saveCustomers() { if (!store.set('customers', S.customers)) toast('เครื่องเต็ม! บันทึกลูกค้าไม่ได้', true); }
+function setCartCust(id) { S.cartCust = id || ''; store.set('cartCust', S.cartCust); }
+
+function openCustomers(onPick) {
+  let q = '';
+  const el = sheet(`${head(onPick ? 'เลือกลูกค้า' : 'ลูกค้า')}
+    <div class="searchrow" style="position:static;padding:0 0 8px">
+      <input class="search" id="kq" placeholder="ชื่อ / เบอร์ / รหัสลูกค้า" autocomplete="off">
+      <button class="iconbtn" id="ks" aria-label="สแกนรหัสลูกค้า"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8v8M10 8v8M14 8v8M17 8v8"/></svg></button>
+    </div>
+    <button class="btn pri block" id="knew">+ สร้างลูกค้า</button>
+    <div class="list" id="kl" style="margin-top:6px"></div>
+    <div class="mut small" style="margin-top:6px">${myCustomers().length} ราย · เห็นเฉพาะลูกค้าของทีมตามสิทธิ์</div>`);
+  const draw = () => {
+    const qq = q.toLowerCase();
+    const list = myCustomers()
+      .filter((c) => !qq || [c.name, c.phone, c.code, c.email].join(' ').toLowerCase().includes(qq))
+      .sort((a, b) => (a.loc === S.loc ? 0 : 1) - (b.loc === S.loc ? 0 : 1) || (b.updatedAt || 0) - (a.updatedAt || 0))
+      .slice(0, 80);
+    $('#kl', el).innerHTML = list.length ? list.map((c) => `
+      <div class="li"><button class="sp" data-pick="${esc(c.id)}" style="text-align:left">
+        <div>${esc(c.name)}${c.dirty ? ' <span class="tag wait">รอส่ง</span>' : ''}</div>
+        <div class="mut small">${esc([c.phone, c.code && 'รหัส ' + c.code, c.province, locName(c.loc)].filter(Boolean).join(' · '))}</div></button>
+        <button class="btn" data-ed="${esc(c.id)}">แก้ไข</button></div>`).join('')
+      : `<div class="mut" style="padding:12px 0">${q ? 'ไม่พบลูกค้า' : 'ยังไม่มีลูกค้า'}</div>`;
+    $$('[data-pick]', el).forEach((b) => {
+      b.onclick = () => { const c = custById(b.dataset.pick); if (onPick) { closeSheet(); onPick(c); } else openCustomerForm(c, () => openCustomers()); };
+    });
+    $$('[data-ed]', el).forEach((b) => { b.onclick = () => openCustomerForm(custById(b.dataset.ed), (c) => (onPick ? onPick(c) : openCustomers())); });
+  };
+  $('#kq', el).oninput = (e) => { q = e.target.value.trim(); draw(); };
+  $('#knew', el).onclick = () => openCustomerForm(null, (c) => (onPick ? onPick(c) : openCustomers()), q);
+  $('#ks', el).onclick = () => openScanner((code) => {
+    const c = myCustomers().find((x) => x.code && x.code.toLowerCase() === String(code).toLowerCase());
+    if (c && onPick) return onPick(c);
+    openCustomers(onPick);
+    const i = $('#kq'); if (i) { i.value = code; i.dispatchEvent(new Event('input')); }
+    if (!c) toast('ไม่พบรหัสลูกค้า ' + code, true);
+  });
+  draw();
+}
+
+function openCustomerForm(c, onSaved, prefill) {
+  const isNew = !c;
+  const d = Object.assign({ country: 'ไทย', loc: S.loc }, c || {});
+  if (isNew && prefill) { if (/^[0-9\- ]{6,}$/.test(prefill)) d.phone = prefill; else d.name = prefill; }
+  const el = sheet(`${head(isNew ? 'สร้างลูกค้า' : 'แก้ไขลูกค้า')}
+    ${CUST_FIELDS.map(([k, label, type, max]) => `<label class="f">${label}</label>` + (k === 'code'
+      ? `<div class="row"><input class="inp" id="c_${k}" maxlength="${max}" value="${esc(d[k] || '')}"><button class="btn" id="cscan">สแกน</button></div>`
+      : `<input class="inp" id="c_${k}" type="${type}" maxlength="${max}" value="${esc(d[k] || '')}"${k === 'province' ? ' list="provList"' : ''}${k === 'zip' ? ' inputmode="numeric"' : ''}${k === 'phone' ? ' inputmode="tel"' : ''}>`)).join('')}
+    <datalist id="provList">${PROVINCES.map((p) => `<option value="${p}">`).join('')}</datalist>
+    ${isNew && locs().length > 1 ? `<label class="f">ทีมที่ดูแลลูกค้า</label><select class="inp" id="c_loc">${locs().map((l) => `<option value="${esc(l.id)}" ${l.id === d.loc ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}</select>` : ''}
+    <button class="btn pri block" id="csave" style="margin-top:14px">บันทึก</button>`);
+  $('#cscan', el).onclick = () => {
+    const keep = readForm();
+    openScanner((code) => { openCustomerForm(c, onSaved); Object.keys(keep).forEach((k) => { const i = $('#c_' + k); if (i) i.value = keep[k]; }); $('#c_code').value = code; });
+  };
+  function readForm() { const o = {}; CUST_FIELDS.forEach(([k]) => { o[k] = $('#c_' + k, el).value.trim(); }); return o; }
+  $('#csave', el).onclick = () => {
+    const f = readForm();
+    if (!f.name) return toast('ใส่ชื่อลูกค้า', true);
+    const digits = f.phone.replace(/\D/g, '');
+    if (f.phone && (digits.length < 9 || digits.length > 10)) return toast('เบอร์โทรไม่ถูกต้อง (9–10 หลัก)', true);
+    if (f.zip && !/^\d{5}$/.test(f.zip)) return toast('รหัสไปรษณีย์ต้องเป็นตัวเลข 5 หลัก', true);
+    if (f.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(f.email)) return toast('อีเมลไม่ถูกต้อง', true);
+    const dup = myCustomers().find((x) => x.id !== d.id && ((digits && x.phone.replace(/\D/g, '') === digits) || (f.code && x.code === f.code)));
+    if (dup && !confirm(`มีลูกค้า "${dup.name}" ที่ใช้${f.code && dup.code === f.code ? 'รหัสลูกค้า' : 'เบอร์'}นี้แล้ว บันทึกเป็นอีกคนหรือไม่?`)) return;
+    const locSel = $('#c_loc', el);
+    const rec = Object.assign({}, d, f, {
+      id: d.id || `C-${randomId(8)}`, loc: isNew ? (locSel ? locSel.value : S.loc) : d.loc,
+      updatedAt: Date.now(), dirty: true
+    });
+    const i = S.customers.findIndex((x) => x.id === rec.id);
+    if (i >= 0) S.customers[i] = rec; else S.customers.unshift(rec);
+    saveCustomers();
+    toast(isNew ? 'สร้างลูกค้าแล้ว' : 'บันทึกแล้ว');
+    syncNow();
+    closeSheet();
+    if (onSaved) onSaved(rec);
+  };
 }
 
 /* ----- pay ----- */
@@ -629,14 +821,17 @@ function openPay() {
   const t = cartTotal(), bal = cartBalance();
   const st0 = (S.data && S.data.settings) || {};
   const needCustomer = bal > 0 || S.cart.some(isCollect);
-  const preCust = (S.cart.find((l) => l.customer) || {}).customer || '';
+  const cc = custById(S.cartCust);
+  const textCust = (S.cart.find((l) => l.customer) || {}).customer || ''; // ลูกค้าจากบิล Loyverse/บิลเก่า
   const st = { method: 'cash' };
   const el = sheet(`${head(S.cart.every(isCollect) ? 'รับชำระ' : 'ชำระเงิน')}
     <div class="total" style="border-top:0;margin-top:0"><span>รับเงินวันนี้</span><span class="num">${baht(t)}</span></div>
-    ${bal > 0 ? `<div class="banner">ค้างเก็บภายหลัง ${baht(bal)} — ต้องใส่ชื่อ/เบอร์ลูกค้าเพื่อตามเก็บ</div>` : ''}
+    ${bal > 0 ? `<div class="banner">ค้างเก็บภายหลัง ${baht(bal)} — ต้องเลือกลูกค้าเพื่อตามเก็บ</div>` : ''}
+    <button class="li" id="pcust" style="width:100%;text-align:left;border:1px solid ${needCustomer && !cc && !textCust ? 'var(--warn)' : 'var(--line)'};border-radius:12px;padding:10px 12px">
+      <span class="sp"><span class="mut small">ลูกค้า${needCustomer ? ' *' : ''}</span><br>${cc ? esc(custLabel(cc)) : textCust ? esc(textCust) : '<span class="mut">+ เลือก / สร้างลูกค้า</span>'}</span>
+      <span class="mut small">${cc || textCust ? 'เปลี่ยน' : ''}</span></button>
     <div class="seg">${Object.keys(METHOD).map((m) => `<button data-mt="${m}">${METHOD[m]}</button>`).join('')}</div>
     <div id="mbody"></div>
-    <label class="f">ลูกค้า (ชื่อ / เบอร์)${needCustomer ? ' *' : ''}</label><input class="inp" id="cust" maxlength="120" value="${esc(preCust)}">
     <label class="f">หมายเหตุ</label><input class="inp" id="note" maxlength="120">
     <button class="btn pri block" id="confirm" style="margin-top:14px">ยืนยัน</button>`);
   const drawBody = () => {
@@ -663,6 +858,7 @@ function openPay() {
   };
   $$('[data-mt]', el).forEach((b) => { b.onclick = () => { st.method = b.dataset.mt; drawBody(); }; });
   drawBody();
+  $('#pcust', el).onclick = () => openCustomers((c) => { setCartCust(c.id); openPay(); });
   $('#confirm', el).onclick = () => {
     let cash = 0, change = 0;
     if (st.method === 'cash') {
@@ -671,11 +867,11 @@ function openPay() {
       if (cash < t) return toast('รับเงินน้อยกว่ายอดที่ต้องชำระ', true);
       change = r2(cash - t);
     }
-    const customer = $('#cust', el).value.trim();
+    const customer = cc ? custLabel(cc) : textCust;
     const note = $('#note', el).value.trim();
-    if (needCustomer && !customer) return toast('ใส่ชื่อหรือเบอร์ลูกค้า', true);
+    if (needCustomer && !customer) return toast('เลือกลูกค้าก่อน', true);
     if (st.method === 'other' && !note) return toast('ระบุช่องทางชำระในหมายเหตุ', true);
-    createBill({ method: st.method, cash, change, note, customer });
+    createBill({ method: st.method, cash, change, note, customer, cust: cc });
   };
 }
 
@@ -694,18 +890,20 @@ function createBill(p) {
   const sh = openShift();
   const lines = S.cart.map((l) => ({
     id: l.id, name: l.name, qty: lineQty(l), price: l.price, due: l.due, stage: l.stage, plan: l.plan,
-    refBill: l.refBill || '', refLine: l.refLine || 0
+    refBill: l.refBill || '', refLine: l.refLine || 0, comment: l.comment || ''
   }));
   const total = cartTotal();
   const bill = {
     id: newBillId(), loc: S.loc, createdAt: Date.now(), sellerId: u.id, sellerName: u.name, device: S.device,
     shiftId: sh ? sh.id : '', type: S.cart.every(isCollect) ? 'COLLECT' : 'SALE', lines,
     subtotal: total, discount: 0, total, balance: cartBalance(), method: p.method,
-    cash: p.cash, change: p.change, note: p.note, customer: p.customer, synced: 0
+    cash: p.cash, change: p.change, note: p.note, customer: p.customer, synced: 0,
+    customerId: p.cust ? p.cust.id : '',
+    cust: p.cust ? { name: p.cust.name, phone: p.cust.phone, addr: custAddr(p.cust), code: p.cust.code } : null
   };
   S.bills.unshift(bill);
   saveBills();
-  S.cart = []; saveCart();
+  S.cart = []; saveCart(); setCartCust('');
   render();
   showReceipt(bill, true);
   if (S.prn.auto && S.prn.mode !== 'none') printBill(bill);
@@ -887,12 +1085,15 @@ function renderSettings(v) {
     ${u.admin ? `<div class="card"><div class="row"><div class="sp"><h3 style="font-size:16px">แผนราคา สด / ผ่อน</h3>
       <div class="mut small">ราคาสด แบบผ่อน (ค่างวด × งวด) เงินดาวน์ ของแต่ละสินค้า</div></div>
       <button class="btn pri" id="planSet">แก้ไข</button></div></div>` : ''}
+    <div class="card"><div class="row"><div class="sp"><h3 style="font-size:16px">ลูกค้า</h3>
+      <div class="mut small">${myCustomers().length} ราย · สร้าง / แก้ไขข้อมูลลูกค้าของทีม</div></div>
+      <button class="btn pri" id="custSet">เปิด</button></div></div>
     <div class="card"><h3 style="font-size:16px">เครื่องพิมพ์ใบเสร็จ</h3>
       <label class="f">วิธีพิมพ์</label>
       <select class="inp" id="pm">
         <option value="none">ไม่พิมพ์ (ใช้แชร์รูปเมื่อต้องการ)</option>
+        <option value="rawbt">ผ่านแอป RawBT (SUNMI / Android ทุกรุ่น)</option>
         <option value="ble">Bluetooth ตรงจากแอป (Android + Chrome, เครื่อง BLE)</option>
-        <option value="rawbt">ผ่านแอป RawBT (Android, ทุกเครื่อง ESC/POS)</option>
         <option value="share">แชร์รูปใบเสร็จไปแอปเครื่องพิมพ์ (iPhone/iPad)</option>
       </select>
       <label class="f">ขนาดกระดาษ</label>
@@ -924,6 +1125,7 @@ function renderSettings(v) {
   $('#out', v).onclick = logout;
   const ss = $('#shopSet', v); if (ss) ss.onclick = openShopSettings;
   const ps = $('#planSet', v); if (ps) ps.onclick = openPlans;
+  $('#custSet', v).onclick = () => openCustomers();
   const inst = $('#inst', v);
   if (inst) inst.onclick = async () => { S.installEvt.prompt(); await S.installEvt.userChoice; S.installEvt = null; render(); };
 }
@@ -1153,11 +1355,12 @@ function stopScan() {
   if (SCAN.stream) { SCAN.stream.getTracks().forEach((t) => t.stop()); SCAN.stream = null; }
   if (SCAN.h5) { const h = SCAN.h5; SCAN.h5 = null; h.stop().catch(() => {}).finally(() => { try { h.clear(); } catch (x) {} }); }
 }
-async function openScanner() {
+async function openScanner(cb) {
+  const onHit = typeof cb === 'function' ? cb : onCode;
   SCAN.done = false;
   sheet(`${head('สแกนบาร์โค้ด')}<div id="scanArea"><div class="mut">กำลังเปิดกล้อง…</div></div>
     <div class="mut small" style="margin-top:8px">เล็งบาร์โค้ดให้อยู่ในกรอบ · ใช้เครื่องยิงบาร์โค้ดได้ที่ช่องค้นหา</div>`, { onClose: stopScan });
-  const hit = (code) => { if (SCAN.done) return; SCAN.done = true; closeSheet(); onCode(code); };
+  const hit = (code) => { if (SCAN.done) return; SCAN.done = true; closeSheet(); onHit(code); };
   const area = $('#scanArea');
   if ('BarcodeDetector' in window) {
     try {
@@ -1316,7 +1519,11 @@ function receiptOps(b, stIn) {
     { t: 'row', l: 'วันที่', r: dt(b.createdAt), scale: 0.85 },
     { t: 'row', l: 'ผู้ขาย', r: b.sellerName || '', scale: 0.85 }
   );
-  if (b.customer) ops.push({ t: 'row', l: 'ลูกค้า', r: b.customer, scale: 0.85 });
+  if (b.cust) {
+    ops.push({ t: 'row', l: 'ลูกค้า', r: b.cust.name, scale: 0.85 });
+    if (b.cust.phone) ops.push({ t: 'row', l: 'โทร', r: b.cust.phone, scale: 0.85 });
+    if (b.cust.addr) ops.push({ t: 'text', s: b.cust.addr, scale: 0.8 });
+  } else if (b.customer) ops.push({ t: 'row', l: 'ลูกค้า', r: b.customer, scale: 0.85 });
   ops.push({ t: 'hr' });
   b.lines.forEach((l) => {
     const col = isCollect(l);
@@ -1334,6 +1541,7 @@ function receiptOps(b, stIn) {
       const bal = lineBal(l);
       if (bal > 0) ops.push({ t: 'text', s: `   ค้าง${l.plan.kind === 'inst' ? 'ดาวน์' : 'ชำระ'} ${baht(bal)}`, scale: 0.8 });
     }
+    if (l.comment) ops.push({ t: 'text', s: '   * ' + l.comment, scale: 0.8 });
   });
   ops.push({ t: 'hr' });
   if (b.discount) {
@@ -1502,7 +1710,10 @@ async function printOps(ops) {
     if (mode === 'none' || mode === 'share') return shareCanvas(cv, `pbd-${Date.now()}.png`);
     const bytes = canvasToEscPos(cv);
     if (mode === 'rawbt') {
-      location.href = 'intent:base64,' + bytesToB64(bytes) + '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
+      // ถ้าเครื่องยังไม่มี RawBT จะเปิดหน้า Play Store ให้ติดตั้ง
+      const fallback = encodeURIComponent('https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter');
+      location.href = 'intent:base64,' + bytesToB64(bytes) +
+        '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;S.browser_fallback_url=' + fallback + ';end;';
       return;
     }
     toast('กำลังพิมพ์…');

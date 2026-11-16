@@ -138,6 +138,10 @@ textarea.inp{resize:vertical;min-height:70px}
   box-shadow:0 0 0 999px rgba(0,0,0,.35)}
 #scan2{width:100%}
 
+.kp{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.kp button{height:64px;border-radius:12px;background:var(--card2);border:1px solid var(--line);font:600 26px Kanit,sans-serif}
+.kp button:active{background:var(--line)}
+.kp .ok{background:var(--ok);border-color:var(--ok);color:#06240f;font-size:20px}
 .toast{position:fixed;left:50%;transform:translateX(-50%);top:calc(env(safe-area-inset-top,0px) + 64px);z-index:60;
   background:#fff;color:#111;border-radius:12px;padding:10px 16px;font-weight:600;max-width:90vw;
   box-shadow:0 10px 30px rgba(0,0,0,.4);text-align:center}
