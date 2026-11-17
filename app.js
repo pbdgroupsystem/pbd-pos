@@ -364,7 +364,8 @@ const planOf = (p) => ({ id: p.id || '', name: p.name || '', kind: p.kind, total
 
 function addToCart(it) {
   const ps = plansOf(it);
-  if (!ps.length) return toast('สินค้านี้ยังไม่มีราคาจากส่วนกลาง — แจ้ง Admin', true);
+  // ยังไม่มีราคาจากส่วนกลาง: พนักงานใส่ราคาขายเองได้ (ไม่มีส่วนลด/ค้างชำระ)
+  if (!ps.length) return openVariant(it, { id: '', name: 'ราคาตามพนักงานระบุ', kind: 'cash', total: 0, units: 1, open: true });
   if (ps.length === 1) return openVariant(it, ps[0]);
   pickPlan(it, ps, (p) => openVariant(it, p));
 }
@@ -494,6 +495,12 @@ function askAmount(o) {
   if (o.stage === 'down' && p.down) hints.push({ label: 'ดาวน์ตามแผน ' + baht(p.down), value: p.down });
   if (o.stage === 'splitDown') hints.push({ label: baht(500), value: 500 });
   if (col && o.max) hints.push({ label: 'ค้างทั้งหมด ' + baht(o.max), value: o.max });
+  if (!col && !(p.total > 0)) {
+    return keypad(`${o.it.name} · ใส่ราคาขาย`, `ราคาขาย${o.qty > 1 ? ' ต่อชิ้น' : ''} (สินค้านี้ยังไม่มีราคาจากส่วนกลาง)`, [], (amt) => {
+      if (!(amt > 0)) return toast('กรอกราคาขาย', true);
+      putLine(o, 'full', amt, amt);
+    });
+  }
   const label = col ? 'ยอดที่เก็บ' + (o.max ? ` (ค้าง ${baht(o.max)})` : '')
     : o.stage === 'full' ? `รับเงินวันนี้${o.qty > 1 ? ' ต่อชิ้น' : ''} · ราคามาตรฐาน ${baht(p.total)}`
     : `รับดาวน์วันนี้${o.qty > 1 ? ' ต่อชิ้น' : ''} · ดาวน์ตามแผน ${baht(p.down)}`;
@@ -750,7 +757,7 @@ function renderGrid() {
     const insts = ps.filter((p) => p.kind === 'inst');
     const price = cash ? `<span class="pr num">${baht(cash.total)}</span>`
       : insts.length ? `<span class="pr num">ดาวน์ ${baht(Math.min(...insts.map((p) => p.down)))}</span>`
-      : `<span class="pr zero">ยังไม่ตั้งราคา (ส่วนกลาง)</span>`;
+      : `<span class="pr zero">ใส่ราคาเองตอนขาย</span>`;
     const src = imgOf(i);
     return `<button class="item${anyImg ? ' hasimg' : ''}" data-id="${esc(i.id)}">
       ${inCart[i.id] ? `<span class="q">${inCart[i.id]}</span>` : ''}
