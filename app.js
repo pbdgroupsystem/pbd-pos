@@ -14,6 +14,7 @@ const ymd = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${pad(d
 const hm = (ms) => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 const dt = (ms) => { const d = new Date(ms); return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear() + 543} ${hm(ms)}`; };
 const sbaht = (n) => (n < 0 ? '-' : n > 0 ? '+' : '') + baht(Math.abs(n));
+const ROLE_TH = { Admin: 'ผู้ดูแลระบบ', BranchAdmin: 'แอดมินประจำสาขา', BranchManager: 'ผู้จัดการสาขา', TeamLead: 'หัวหน้าทีม' };
 const METHOD = { cash: 'เงินสด', transfer: 'โอน/QR', other: 'อื่นๆ' };
 
 function randomId(n) {
@@ -138,12 +139,64 @@ function applyData(j, t0) {
   }
 }
 
+/* ---------- รูปสินค้า (เก็บในเครื่อง ใช้ได้ตอนออฟไลน์) ---------- */
+const IMG = {};
+function imgOf(it) {
+  if (!it || !it.img) return '';
+  if (!(it.id in IMG)) IMG[it.id] = store.get('img_' + it.id, null);
+  const c = IMG[it.id];
+  return c && c.v === it.img ? c.d : '';
+}
+function putImg(id, rec) {
+  IMG[id] = rec;
+  if (!store.set('img_' + id, rec)) { /* เครื่องเต็ม: ใช้ในหน่วยความจำไปก่อน */ }
+}
+async function syncImages() {
+  if (!navigator.onLine || !S.data) return;
+  const need = items().filter((it) => it.img && !imgOf(it)).map((it) => it.id);
+  items().filter((it) => !it.img).forEach((it) => { if (store.get('img_' + it.id, null)) { store.del('img_' + it.id); delete IMG[it.id]; } });
+  for (let i = 0; i < need.length; i += 30) {
+    try {
+      const j = await api('itemImages', { ids: need.slice(i, i + 30) });
+      Object.keys(j.images || {}).forEach((id) => putImg(id, j.images[id]));
+    } catch (x) { return; }
+    if (S.view === 'sell') renderGrid();
+  }
+}
+/** ครอปกลางเป็นสี่เหลี่ยมจัตุรัส ย่อเหลือ 320px JPEG */
+async function squareJpeg(file, size = 320) {
+  const url = URL.createObjectURL(file);
+  try {
+    const im = await loadImg(url);
+    const side = Math.min(im.width, im.height);
+    const c = document.createElement('canvas'); c.width = size; c.height = size;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, size, size);
+    ctx.drawImage(im, (im.width - side) / 2, (im.height - side) / 2, side, side, 0, 0, size, size);
+    return c.toDataURL('image/jpeg', 0.85);
+  } finally { URL.revokeObjectURL(url); }
+}
+
+/** Admin เปิดแอป → บันทึกลิงก์แอปนี้ไว้ ให้เมนู "ขายหน้างาน (POS)" ใน PBDSTOCK ลิงก์มาถูกที่ */
+async function maybeSaveAppUrl() {
+  const st = S.data && S.data.settings;
+  if (!user().admin || !st || !navigator.onLine) return;
+  const url = location.origin + location.pathname.replace(/index\.html$/, '');
+  if (st.appUrl === url) return;
+  try {
+    const j = await api('saveSettings', { fields: { appUrl: url } });
+    if (j.settings) { S.data.settings = j.settings; store.set('data', S.data); }
+  } catch (x) { /* ลองใหม่ครั้งหน้า */ }
+}
+
 async function refreshData(manual) {
   if (!navigator.onLine || !S.session) return;
   try {
     const t0 = Date.now();
     applyData(await api('bootstrap', { sv: S.data && S.data.settings && S.data.settings.ver }), t0);
     S.authLost = false;
+    maybeSaveAppUrl();
+    syncImages();
     if (manual) toast('อัปเดตสินค้าและราคาแล้ว');
     render();
   } catch (e) {
@@ -237,6 +290,8 @@ async function startLogin() {
     history.replaceState(null, '', location.pathname);
     showApp();
     syncNow();
+    maybeSaveAppUrl();
+    syncImages();
   } catch (e) {
     store.del('loginPending');
     msg.textContent = e.message;
@@ -309,7 +364,7 @@ const planOf = (p) => ({ id: p.id || '', name: p.name || '', kind: p.kind, total
 
 function addToCart(it) {
   const ps = plansOf(it);
-  if (!ps.length) return openVariant(it, { id: '', kind: 'cash', total: 0, units: 1 });
+  if (!ps.length) return toast('สินค้านี้ยังไม่มีราคาจากส่วนกลาง — แจ้ง Admin', true);
   if (ps.length === 1) return openVariant(it, ps[0]);
   pickPlan(it, ps, (p) => openVariant(it, p));
 }
@@ -334,7 +389,9 @@ function openVariant(it, plan, edit) {
   const cur = edit != null ? S.cart[edit] : null;
   const st = { qty: cur ? cur.qty : 1, comment: cur ? cur.comment || '' : '' };
   const p = planOf(plan);
+  const vimg = imgOf(it);
   const el = sheet(`${head(it.name)}
+    ${vimg ? `<img src="${vimg}" alt="" style="width:96px;height:96px;border-radius:12px;object-fit:cover;float:right;margin:0 0 8px 10px">` : ''}
     <div class="mut small">${esc(planLabel(p) || 'ไม่มีราคาตั้งไว้ — กรอกราคาขายเอง')}</div>
     <label class="f" style="color:var(--ok)">ตัวเลือก</label>
     <div class="list">${STAGES_OF(p.kind).map((s) => `
@@ -414,41 +471,67 @@ function keypad(title, label, hints, onOk) {
   draw();
 }
 
+/** ราคามาตรฐานมาจาก Admin ส่วนกลาง: ลดราคาได้แต่ต้องใส่เหตุผล · เงินดาวน์ต้องตามแผน */
+function askReason(title, cb) {
+  const el = sheet(`${head(title)}
+    <div class="mut small">ส่วนลดจะขึ้นในรายงานหลังบ้าน (เทียบกับราคามาตรฐานจากส่วนกลาง)</div>
+    <label class="f">เหตุผลที่ลดราคา *</label><input class="inp" id="rr" maxlength="160" placeholder="เช่น ลูกค้าซื้อคู่ / โปรสาขา / ลูกค้าเก่า">
+    <div class="row" style="flex-wrap:wrap;gap:6px;margin-top:8px">${['ลูกค้าซื้อหลายชิ้น', 'ลูกค้าเก่า', 'โปรโมชันสาขา', 'แลกกับไม่ติดตั้ง'].map((t) => `<button class="chip" data-r="${t}">${t}</button>`).join('')}</div>
+    <button class="btn pri block" id="rok" style="margin-top:14px">ยืนยันส่วนลด</button>`);
+  $$('[data-r]', el).forEach((b) => { b.onclick = () => { $('#rr', el).value = b.dataset.r; }; });
+  $('#rok', el).onclick = () => {
+    const r = $('#rr', el).value.trim();
+    if (r.length < 3) return toast('ใส่เหตุผลที่ลดราคา', true);
+    cb(r);
+  };
+  setTimeout(() => { const i = $('#rr', el); if (i) i.focus(); }, 50);
+}
+
 function askAmount(o) {
   const p = o.plan, col = o.stage === 'collect' || o.stage === 'collectDown';
   const hints = [];
-  if (o.stage === 'full' && p.total) hints.push({ label: 'ราคาเต็ม ' + baht(p.total), value: p.total });
-  if (o.stage === 'down' && p.down) hints.push({ label: 'ดาวน์ ' + baht(p.down), value: p.down });
-  if (o.stage === 'splitDown') { hints.push({ label: baht(500), value: 500 }); if (p.down) hints.push({ label: 'ดาวน์เต็ม ' + baht(p.down), value: p.down }); }
+  if (o.stage === 'full' && p.total) hints.push({ label: 'ราคามาตรฐาน ' + baht(p.total), value: p.total });
+  if (o.stage === 'down' && p.down) hints.push({ label: 'ดาวน์ตามแผน ' + baht(p.down), value: p.down });
+  if (o.stage === 'splitDown') hints.push({ label: baht(500), value: 500 });
   if (col && o.max) hints.push({ label: 'ค้างทั้งหมด ' + baht(o.max), value: o.max });
-  const label = 'ราคาขาย' + (col ? (o.max ? ` (ค้าง ${baht(o.max)})` : '') : o.qty > 1 ? ' ต่อชิ้น' : '');
+  const label = col ? 'ยอดที่เก็บ' + (o.max ? ` (ค้าง ${baht(o.max)})` : '')
+    : o.stage === 'full' ? `รับเงินวันนี้${o.qty > 1 ? ' ต่อชิ้น' : ''} · ราคามาตรฐาน ${baht(p.total)}`
+    : `รับดาวน์วันนี้${o.qty > 1 ? ' ต่อชิ้น' : ''} · ดาวน์ตามแผน ${baht(p.down)}`;
   keypad(`${o.it.name} · ${STAGE[o.stage]}`, label, hints, (amt) => {
     if (!(amt > 0)) return toast('กรอกจำนวนเงิน', true);
-    if (col && o.max && amt > o.max + 0.001) return toast('เกินยอดค้าง ' + baht(o.max), true);
-    if (o.stage === 'splitDown' && p.down && amt >= p.down) {
-      toast('รับเท่ายอดดาวน์ → บันทึกเป็นดาวน์เต็ม');
-      return putLine(o, 'down', amt, amt);
+    if (col) {
+      if (o.max && amt > o.max + 0.001) return toast('เกินยอดค้าง ' + baht(o.max), true);
+      return putLine(o, o.stage, o.max || amt, amt);
     }
-    if (o.stage === 'full' && p.total && amt < p.total) {
-      // จ่ายน้อยกว่าราคาเต็ม: ลดราคา หรือ ค้างเก็บเพิ่ม
-      const el = sheet(`${head('รับ ' + baht(amt) + ' จากราคาเต็ม ' + baht(p.total))}
-        <button class="btn block" id="dsc" style="margin-bottom:8px">ลดราคา — ขายที่ ${baht(amt)} (ไม่ค้าง)</button>
-        <button class="btn pri block" id="bal">ค้างเก็บเพิ่ม ${baht((p.total - amt) * o.qty)} (มัดจำ/จ่ายบางส่วน)</button>`);
-      $('#dsc', el).onclick = () => putLine(o, 'full', amt, amt);
-      $('#bal', el).onclick = () => putLine(o, 'full', p.total, amt);
-      return;
+    if (o.stage === 'down' || o.stage === 'splitDown') {
+      // เงินดาวน์ต้องตามแผนเท่านั้น: จ่ายครบ = ดาวน์เต็ม · จ่ายน้อยกว่า = แบ่งดาวน์ (ค้างเก็บเงินดาวน์เพิ่ม)
+      if (amt > p.down + 0.001) return toast('เกินยอดดาวน์ตามแผน ' + baht(p.down), true);
+      if (amt >= p.down) { if (o.stage === 'splitDown') toast('รับครบยอดดาวน์ → ดาวน์เต็ม'); return putLine(o, 'down', p.down, p.down); }
+      if (o.stage === 'down') toast('รับน้อยกว่ายอดดาวน์ → แบ่งดาวน์ ค้าง ' + baht((p.down - amt) * o.qty));
+      return putLine(o, 'splitDown', p.down, amt);
     }
-    if (o.stage === 'splitDown') return putLine(o, 'splitDown', p.down || amt, amt);
-    if (col) return putLine(o, o.stage, o.max || amt, amt);
-    putLine(o, o.stage, amt, amt); // full (ราคาเต็มหรือสูงกว่า) / down
+    // ชำระวันสั่งซื้อ (ขายสด)
+    if (amt > p.total + 0.001) return toast('เกินราคามาตรฐาน ' + baht(p.total), true);
+    if (amt >= p.total) return putLine(o, 'full', p.total, p.total);
+    const el = sheet(`${head('รับ ' + baht(amt) + ' จากราคามาตรฐาน ' + baht(p.total))}
+      <button class="btn pri block" id="bal" style="margin-bottom:8px">ค้างเก็บเพิ่ม ${baht((p.total - amt) * o.qty)} (มัดจำ / จ่ายบางส่วน)</button>
+      <button class="btn block" id="dsc" style="margin-bottom:8px">ลดราคาเหลือ ${baht(amt)} — จ่ายครบ (ต้องใส่เหตุผล)</button>
+      <button class="btn block" id="both">ลดราคา และค้างเก็บส่วนที่เหลือ…</button>`);
+    $('#bal', el).onclick = () => putLine(o, 'full', p.total, amt);
+    $('#dsc', el).onclick = () => askReason('ลดราคา ' + baht(p.total - amt), (r) => putLine(o, 'full', amt, amt, r));
+    $('#both', el).onclick = () => keypad('ราคาที่ตกลงขาย (หลังลด)', `ต้องไม่น้อยกว่าที่รับวันนี้ ${baht(amt)} และไม่เกิน ${baht(p.total)}`, [], (deal) => {
+      if (deal < amt || deal > p.total) return toast('ราคาที่ตกลงไม่ถูกต้อง', true);
+      if (deal === p.total) return putLine(o, 'full', p.total, amt);
+      askReason('ลดราคา ' + baht(p.total - deal), (r) => putLine(o, 'full', deal, amt, r));
+    });
   });
 }
 
-function putLine(o, stage, due, price) {
+function putLine(o, stage, due, price, discReason) {
   const col = stage === 'collect' || stage === 'collectDown';
   const line = {
     key: randomId(6), id: o.it.id, name: o.it.name, plan: planOf(o.plan), stage,
-    due: r2(due), price: r2(price), qty: col ? 1 : o.qty, comment: o.comment || ''
+    due: r2(due), price: r2(price), qty: col ? 1 : o.qty, comment: o.comment || '', discReason: discReason || ''
   };
   if (col) {
     line.refBill = o.ref ? o.ref.bill : ''; line.refLine = o.ref ? o.ref.line : 0;
@@ -660,15 +743,18 @@ function renderGrid() {
   const inCart = {};
   S.cart.forEach((l) => { if (!isCollect(l)) inCart[l.id] = (inCart[l.id] || 0) + l.qty; });
   const list = filtered();
+  const anyImg = items().some((x) => x.img);
   g.innerHTML = list.length ? list.map((i) => {
     const ps = plansOf(i);
     const cash = ps.find((p) => p.kind === 'cash');
     const insts = ps.filter((p) => p.kind === 'inst');
     const price = cash ? `<span class="pr num">${baht(cash.total)}</span>`
       : insts.length ? `<span class="pr num">ดาวน์ ${baht(Math.min(...insts.map((p) => p.down)))}</span>`
-      : `<span class="pr zero">ไม่มีราคา · กดเพื่อระบุ</span>`;
-    return `<button class="item" data-id="${esc(i.id)}">
+      : `<span class="pr zero">ยังไม่ตั้งราคา (ส่วนกลาง)</span>`;
+    const src = imgOf(i);
+    return `<button class="item${anyImg ? ' hasimg' : ''}" data-id="${esc(i.id)}">
       ${inCart[i.id] ? `<span class="q">${inCart[i.id]}</span>` : ''}
+      ${anyImg ? (src ? `<img class="pimg" src="${src}" alt="" loading="lazy">` : `<span class="pimg ph">${esc(i.id)}</span>`) : ''}
       <span class="nm">${esc(i.name)}</span>
       <span>${price}${insts.length ? `<span class="mut small" style="display:block">ผ่อนได้ ${insts.length} แบบ</span>` : ''}</span>
     </button>`;
@@ -698,6 +784,7 @@ function openCart() {
         <div class="small"><span class="tag ${isCollect(l) ? 'ok' : l.plan.kind === 'inst' ? 'wait' : 'ok'}">${STAGE[l.stage]}</span>
           ${isCollect(l) ? `<span class="mut">อ้างอิง ${esc(l.refBill)}</span>` : ''}
           ${bal > 0 ? `<span style="color:var(--warn)">ค้าง ${baht(bal)}</span>` : ''}</div>
+          ${l.discReason ? `<div class="small" style="color:var(--warn)">ลด ${baht((l.plan.total - l.due) * l.qty)} · ${esc(l.discReason)}</div>` : ''}
           ${l.comment ? `<div class="mut small">💬 ${esc(l.comment)}</div>` : ''}</button>
         <div class="num" style="min-width:76px;text-align:right">${baht(lineQty(l) * l.price)}</div>
         <button class="x" data-x="${i}" aria-label="ลบรายการ" style="flex:none">×</button></div>`;
@@ -890,7 +977,7 @@ function createBill(p) {
   const sh = openShift();
   const lines = S.cart.map((l) => ({
     id: l.id, name: l.name, qty: lineQty(l), price: l.price, due: l.due, stage: l.stage, plan: l.plan,
-    refBill: l.refBill || '', refLine: l.refLine || 0, comment: l.comment || ''
+    refBill: l.refBill || '', refLine: l.refLine || 0, comment: l.comment || '', discReason: l.discReason || ''
   }));
   const total = cartTotal();
   const bill = {
@@ -1074,7 +1161,7 @@ function renderSettings(v) {
   const p = S.prn;
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
   v.innerHTML = `${banners()}
-    <div class="card"><div class="row"><div class="sp"><h3>${esc(u.name)}</h3><div class="mut small">${esc(u.role)} · ขายได้ ${locs().length} ทีม</div></div>
+    <div class="card"><div class="row"><div class="sp"><h3>${esc(u.name)}</h3><div class="mut small">${esc(ROLE_TH[u.role] || u.role)} · ${locs().length} ทีม: ${esc(locs().map((l) => l.id).join(', '))}</div></div>
       <button class="btn" id="out">ออก</button></div></div>
     ${!standalone ? `<div class="card"><h3 style="font-size:16px">ติดตั้งลงเครื่อง</h3>
       <div class="mut small" style="margin:6px 0 10px">ติดตั้งเป็นแอปเพื่อให้เปิดได้ตอนไม่มีเน็ต${S.installEvt ? '' : ' — Android: เมนู ⋮ › เพิ่มลงหน้าจอหลัก / iPhone: ปุ่มแชร์ › เพิ่มไปยังหน้าจอโฮม'}</div>
@@ -1263,7 +1350,8 @@ function openPlans() {
     const list = items().filter((i) => !q || (i.name + ' ' + i.id).toLowerCase().includes(q));
     $('#pl', el).innerHTML = list.map((i) => {
       const ps = plansOf(i);
-      return `<button class="li" data-it="${esc(i.id)}" style="width:100%;text-align:left"><div class="sp"><div>${esc(i.name)}</div>
+      const src = imgOf(i);
+      return `<button class="li" data-it="${esc(i.id)}" style="width:100%;text-align:left">${src ? `<img src="${src}" alt="" style="width:44px;height:44px;border-radius:8px;object-fit:cover">` : '<span style="width:44px;height:44px;border-radius:8px;background:var(--card2);flex:none"></span>'}<div class="sp"><div>${esc(i.name)}</div>
         <div class="mut small">${ps.length ? ps.map((p) => esc(p.kind === 'inst' ? `ผ่อน ${baht(p.inst)}×${p.n}` : `สด ${baht(p.total)}`)).join(' · ') : 'ยังไม่มีราคา'}</div></div>
         <span class="mut">›</span></button>`;
     }).join('');
@@ -1288,7 +1376,13 @@ function editPlans(it) {
   if (!it) return;
   const rows = (it.plans || []).filter((p) => !/-PRICE$/.test(p.id)).map((p) => Object.assign({}, p));
   if (!rows.length && it.price) rows.push({ id: '', name: '', kind: 'cash', total: it.price, units: 1 });
-  const el = sheet(`${head(it.name)}<div id="rows"></div>
+  const el = sheet(`${head(it.name)}
+    <div class="card" style="margin-top:0"><div class="mut small" style="margin-bottom:6px">รูปสินค้า (แสดงในหน้าขาย)</div>
+      <div class="imgpick"><div class="pv ${imgOf(it) ? '' : 'empty'}" id="ipv">${imgOf(it) ? `<img src="${imgOf(it)}" alt="">` : 'ยังไม่มีรูป'}</div>
+        <div class="sp"><div class="mut small">ถ่ายรูปหรือเลือกจากเครื่อง ระบบครอปเป็นสี่เหลี่ยมให้</div>
+          <div class="row" style="margin-top:6px"><button class="btn" id="ipick">เลือกรูป</button>${it.img ? '<button class="btn" id="idel">ลบรูป</button>' : ''}</div></div>
+        <input type="file" accept="image/*" class="hidden" id="ifile"></div></div>
+    <div id="rows"></div>
     <button class="btn block" id="add" style="margin-top:8px">+ เพิ่มแบบการขาย</button>
     <div class="row" style="margin-top:12px"><button class="btn" id="back">กลับ</button><button class="btn pri sp" id="save">บันทึก</button></div>`);
   const n = (x) => r2(parseFloat(x) || 0);
@@ -1317,6 +1411,25 @@ function editPlans(it) {
   };
   $('#add', el).onclick = () => { rows.push({ id: '', name: '', kind: 'inst', total: 0, inst: 0, n: 0, down: 0, units: 1 }); draw(); };
   $('#back', el).onclick = openPlans;
+  const saveImg = async (data) => {
+    if (!navigator.onLine) return toast('ต้องต่ออินเทอร์เน็ต', true);
+    toast('กำลังบันทึกรูป…');
+    try {
+      const j = await api('saveItemImage', { itemId: it.id, image: data });
+      S.data.items = j.items; store.set('data', S.data);
+      Object.keys(j.images || {}).forEach((id) => putImg(id, j.images[id]));
+      if (!data) { store.del('img_' + it.id); delete IMG[it.id]; }
+      toast(data ? 'บันทึกรูปแล้ว' : 'ลบรูปแล้ว');
+      editPlans(items().find((x) => x.id === it.id));
+    } catch (x) { toast(x.message, true); }
+  };
+  $('#ipick', el).onclick = () => $('#ifile', el).click();
+  $('#ifile', el).onchange = async (e) => {
+    const f = e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    try { saveImg(await squareJpeg(f)); } catch (x) { toast('อ่านรูปไม่ได้', true); }
+  };
+  const idel = $('#idel', el); if (idel) idel.onclick = () => { if (confirm('ลบรูปสินค้านี้?')) saveImg(''); };
   $('#save', el).onclick = async (e) => {
     if (!navigator.onLine) return toast('ต้องต่ออินเทอร์เน็ต', true);
     for (const p of rows) {
@@ -1540,6 +1653,9 @@ function receiptOps(b, stIn) {
       ops.push({ t: 'text', s: `   ${STAGE[l.stage] ? STAGE[l.stage] + ' · ' : ''}${l.qty} x ${baht(l.price)}`, scale: 0.8 });
       const bal = lineBal(l);
       if (bal > 0) ops.push({ t: 'text', s: `   ค้าง${l.plan.kind === 'inst' ? 'ดาวน์' : 'ชำระ'} ${baht(bal)}`, scale: 0.8 });
+    }
+    if (!col && l.plan && l.plan.kind === 'cash' && l.plan.total > l.due) {
+      ops.push({ t: 'text', s: `   ราคาปกติ ${baht(l.plan.total)} ส่วนลด ${baht((l.plan.total - l.due) * l.qty)}`, scale: 0.8 });
     }
     if (l.comment) ops.push({ t: 'text', s: '   * ' + l.comment, scale: 0.8 });
   });
