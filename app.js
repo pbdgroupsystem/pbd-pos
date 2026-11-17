@@ -1617,6 +1617,10 @@ function parseIdCard(text, provinces) {
     l = l.replace(/[^ก-๙a-zA-Z.\s]/g, '').replace(/\s+/g, ' ').trim().replace(/^(นางสาว|นาย|นาง)\s+/, '$1');
     if (/[ก-๙]{2,}/.test(l) && !/Name|Identification|ประจำตัว/.test(l)) out.name = l;
   }
+  if (!out.name) { // อ่านชื่อไทยไม่ได้ → ใช้ชื่ออังกฤษบนบัตรแทน
+    const en = /Name\s*:?\s*(Mr\.?|Mrs\.?|Miss|Ms\.?)?\s*([A-Za-z][A-Za-z\-]+)[\s\S]*?Last\s*name\s*:?\s*([A-Za-z][A-Za-z\-]+)/i.exec(T);
+    if (en) out.name = (en[1] ? en[1].replace(/\.?$/, '.') + ' ' : '') + en[2] + ' ' + en[3];
+  }
   // ที่อยู่: ตั้งแต่ "ที่อยู่" จนเจอวันออกบัตร/วันหมดอายุ
   let addr = '';
   const ai = lines.findIndex((l) => /ที่\s*อยู่/.test(l));
@@ -1652,7 +1656,7 @@ function parseIdCard(text, provinces) {
 
 /* ---------- สแกนบัตรประชาชน (OCR) ---------- */
 // ตำแหน่งบนบัตร (สัดส่วนของกรอบ) ที่ปิดไว้ก่อนส่ง: แถบเลขบัตร/หัวบัตร และรูปหน้า
-const IDC = { W: 1200, R: 85.6 / 54, MASK: [[0, 0, 1, 0.29], [0.7, 0.36, 0.3, 0.64]] };
+const IDC = { W: 1200, R: 85.6 / 54, MASK: [[0, 0, 1, 0.235], [0.71, 0.4, 0.29, 0.6]] };
 function idcMask(ctx, w, h) {
   ctx.fillStyle = '#fff';
   IDC.MASK.forEach(([x, y, mw, mh]) => ctx.fillRect(x * w, y * h, mw * w, mh * h));
