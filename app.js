@@ -1626,17 +1626,16 @@ function receiptOps(b, stIn) {
   ops.push(...multiline(st.address, { scale: 0.85 }));
   if (st.phone) ops.push({ t: 'text', s: 'โทร ' + st.phone, align: 'center', scale: 0.85 });
   ops.push(
-    { t: 'text', s: locName(b.loc), align: 'center' },
     { t: 'hr' },
     { t: 'row', l: 'เลขที่', r: b.id, scale: 0.85 },
-    { t: 'row', l: 'วันที่', r: dt(b.createdAt), scale: 0.85 },
-    { t: 'row', l: 'ผู้ขาย', r: b.sellerName || '', scale: 0.85 }
+    { t: 'row', l: 'วันที่', r: dt(b.createdAt), scale: 0.85 }
   );
   if (b.cust) {
     ops.push({ t: 'row', l: 'ลูกค้า', r: b.cust.name, scale: 0.85 });
     if (b.cust.phone) ops.push({ t: 'row', l: 'โทร', r: b.cust.phone, scale: 0.85 });
     if (b.cust.addr) ops.push({ t: 'text', s: b.cust.addr, scale: 0.8 });
   } else if (b.customer) ops.push({ t: 'row', l: 'ลูกค้า', r: b.customer, scale: 0.85 });
+  if (b.sellerName) ops.push({ t: 'row', l: 'พนักงาน', r: b.sellerName, scale: 0.85 });
   ops.push({ t: 'hr' });
   b.lines.forEach((l) => {
     const col = isCollect(l);
