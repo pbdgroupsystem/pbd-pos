@@ -1,8 +1,8 @@
 // PBD POS service worker — ทำให้เปิดหน้าขายได้แม้ไม่มีเน็ต
 // เปลี่ยนเลขเวอร์ชันนี้ทุกครั้งที่อัปโหลดไฟล์ใหม่ เพื่อให้เครื่องพนักงานรับเวอร์ชันใหม่เร็วขึ้น
-const VERSION = 'pbd-pos-v1.6.2';
+const VERSION = 'pbd-pos-v1.7.0';
 
-const SHELL = ['./', './index.html', './app.js', './config.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
+const SHELL = ['./', './index.html', './app.js', './qr.js', './config.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 const LIBS = [
   'https://static.line-scdn.net/liff/edge/2/sdk.js',
   'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js'

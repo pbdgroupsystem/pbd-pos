@@ -164,7 +164,15 @@ textarea.inp{resize:vertical;min-height:70px}
     <div class="mut">ขายหน้างาน · ทำงานได้แม้เน็ตหลุด</div>
   </div>
   <button class="linebtn" id="loginBtn">เข้าสู่ระบบด้วย LINE</button>
+  <button class="btn" id="qrBtn" style="min-width:260px">เครื่องนี้ไม่มี LINE · สแกน QR ด้วยมือถือ</button>
   <div class="mut small" id="loginMsg"></div>
+  <div id="qrBox" class="hidden" style="display:flex;flex-direction:column;align-items:center;gap:10px">
+    <canvas id="qrCv" width="240" height="240" style="width:240px;height:240px;border-radius:12px;background:#fff"></canvas>
+    <div>รหัสยืนยัน <b class="num" id="qrPin" style="font-size:22px;letter-spacing:4px"></b></div>
+    <div class="mut small" style="max-width:300px">เปิดกล้องหรือ LINE บนมือถือ แล้วสแกน QR นี้ → ตรวจรหัสให้ตรงกัน → กด "อนุญาต"</div>
+    <div class="mut small" id="qrLeft"></div>
+    <button class="btn" id="qrNew">สร้าง QR ใหม่</button>
+  </div>
 </div>
 
 <div id="app" class="hidden">
@@ -191,6 +199,7 @@ textarea.inp{resize:vertical;min-height:70px}
 
 <script src="config.js"></script>
 <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<script src="qr.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

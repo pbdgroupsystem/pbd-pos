@@ -279,23 +279,100 @@ async function startLogin() {
     msg.textContent = 'กำลังตรวจสิทธิ์…';
     const t0 = Date.now();
     const j = await api('login', { idToken });
-    if (S.session && S.session.user && S.session.user.id !== j.user.id) {
-      S.cart = S.cart.filter((l) => !isCollect(l)); saveCart(); S.report = null;
-      S.customers = S.customers.filter((c) => c.dirty); setCartCust('');
-    }
-    S.session = { token: j.token, user: j.user };
-    store.set('session', S.session);
-    applyData(j, t0);
-    S.authLost = false;
-    history.replaceState(null, '', location.pathname);
-    showApp();
-    syncNow();
-    maybeSaveAppUrl();
-    syncImages();
+    finishLogin(j, t0);
   } catch (e) {
     store.del('loginPending');
     msg.textContent = e.message;
   }
+}
+
+function finishLogin(j, t0) {
+  if (S.session && S.session.user && S.session.user.id !== j.user.id) {
+    S.cart = S.cart.filter((l) => !isCollect(l)); saveCart(); S.report = null;
+    S.customers = S.customers.filter((c) => c.dirty); setCartCust('');
+  }
+  S.session = { token: j.token, user: j.user };
+  store.set('session', S.session);
+  applyData(j, t0);
+  S.authLost = false;
+  history.replaceState(null, '', location.pathname);
+  stopQr();
+  showApp();
+  syncNow();
+  maybeSaveAppUrl();
+  syncImages();
+  checkPair();
+}
+
+/* ---------- เข้าสู่ระบบด้วย QR (เครื่องที่ไม่มี LINE เช่น SUNMI) ---------- */
+let QR = null;
+const deviceModel = () => { const m = /Android [\d.]+; ([^;)]+)/.exec(navigator.userAgent); return m ? m[1].trim() : (/iPhone|iPad/.test(navigator.userAgent) ? 'iPhone/iPad' : 'คอมพิวเตอร์/อื่นๆ'); };
+function stopQr() { if (QR) { clearTimeout(QR.timer); QR = null; } const b = $('#qrBox'); if (b) b.classList.add('hidden'); }
+function drawQr(canvas, text) {
+  const m = window.pbdQr(text), n = m.length, q = 4, s = Math.floor(240 / (n + q * 2));
+  canvas.width = canvas.height = (n + q * 2) * s;
+  const x = canvas.getContext('2d');
+  x.fillStyle = '#fff'; x.fillRect(0, 0, canvas.width, canvas.height); x.fillStyle = '#000';
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (m[r][c]) x.fillRect((c + q) * s, (r + q) * s, s, s);
+}
+async function startQrLogin() {
+  const msg = $('#loginMsg'), box = $('#qrBox');
+  if (!navigator.onLine) { msg.textContent = 'ต้องต่ออินเทอร์เน็ตเพื่อเข้าสู่ระบบ'; return; }
+  stopQr(); msg.textContent = 'กำลังสร้าง QR…';
+  try {
+    const j = await api('qrStart', { device: S.device, model: deviceModel() });
+    const url = `https://liff.line.me/${CFG.LIFF_ID}?pair=${j.code}`;
+    QR = { code: j.code, end: Date.now() + j.ttl * 1000, timer: 0 };
+    box.classList.remove('hidden'); msg.textContent = '';
+    drawQr($('#qrCv'), url);
+    $('#qrPin').textContent = j.code.slice(-4);
+    const tick = async () => {
+      if (!QR || QR.code !== j.code) return;
+      const left = Math.max(0, Math.round((QR.end - Date.now()) / 1000));
+      $('#qrLeft').textContent = `QR ใช้ได้อีก ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} นาที`;
+      if (!left) { $('#qrLeft').textContent = 'QR หมดอายุแล้ว — กดสร้างใหม่'; $('#qrCv').style.opacity = 0.15; return; }
+      try {
+        const t0 = Date.now();
+        const r = await api('qrPoll', { code: j.code });
+        if (!QR || QR.code !== j.code) return;
+        if (r.status === 'ok') return finishLogin(r, t0);
+        if (r.status === 'expired') { QR.end = 0; return tick(); }
+      } catch (e) { /* เน็ตสะดุด ลองใหม่รอบหน้า */ }
+      if (QR && QR.code === j.code) QR.timer = setTimeout(tick, 2500);
+    };
+    $('#qrCv').style.opacity = 1;
+    tick();
+  } catch (e) { msg.textContent = e.message; }
+}
+
+/** มือถือที่สแกน QR: เปิดผ่าน LINE แล้วถามยืนยันก่อนให้เครื่องขายเข้าสู่ระบบด้วยบัญชีนี้ */
+function pairFromUrl() {
+  const p = new URLSearchParams(location.search);
+  let code = p.get('pair');
+  if (!code && p.get('liff.state')) code = new URLSearchParams(p.get('liff.state').replace(/^[^?]*\?/, '')).get('pair');
+  return code && /^[A-Z2-9]{10}$/.test(code) ? code : '';
+}
+function checkPair() {
+  const code = store.get('pair', '');
+  if (!code || !S.session) return;
+  store.del('pair');
+  const el = sheet(`${head('ให้เครื่องขายเข้าสู่ระบบ')}
+    <div style="text-align:center;margin:6px 0 14px">
+      <div class="mut">รหัสบนหน้าจอเครื่องขายต้องตรงกับ</div>
+      <div class="num" style="font-size:40px;letter-spacing:6px;font-weight:700">${esc(code.slice(-4))}</div>
+    </div>
+    <div class="mut small" style="margin-bottom:14px">เครื่องขายจะเข้าสู่ระบบในชื่อ <b>${esc(user().name)}</b> และบิลที่ขายจากเครื่องนั้นจะเป็นชื่อคุณ อนุญาตเฉพาะเครื่องที่คุณใช้ขายเองเท่านั้น</div>
+    <button class="btn pri block" id="pOk">อนุญาต</button>
+    <button class="btn block" id="pNo" style="margin-top:8px">ไม่อนุญาต</button>`);
+  $('#pNo', el).onclick = closeSheet;
+  $('#pOk', el).onclick = async (e) => {
+    e.target.disabled = true;
+    try {
+      const r = await api('qrApprove', { code });
+      closeSheet();
+      toast(`เครื่องขาย${r.model ? ' ' + r.model : ''} เข้าสู่ระบบแล้ว`);
+    } catch (x) { e.target.disabled = false; toast(x.message, true); }
+  };
 }
 
 function logout() {
@@ -1849,7 +1926,11 @@ const printBill = (b) => printOps(receiptOps(b));
 
 /* ---------- boot ---------- */
 function boot() {
+  const pc = pairFromUrl();
+  if (pc) store.set('pair', pc);
   $('#loginBtn').onclick = startLogin;
+  $('#qrBtn').onclick = startQrLogin;
+  $('#qrNew').onclick = startQrLogin;
   $('#teamBtn').onclick = openTeamPicker;
   $('#cartbar').onclick = openCart;
   $$('#nav button').forEach((b) => { b.onclick = () => go(b.dataset.v); });
@@ -1861,9 +1942,11 @@ function boot() {
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 
   if (S.session) {
+    if (pc) history.replaceState(null, '', location.pathname);
     showApp();
     syncNow();
     refreshData();
+    checkPair();
   } else {
     showLogin();
     if (store.get('loginPending', 0) || /[?&](code|liff\.state)=/.test(location.search)) startLogin();
