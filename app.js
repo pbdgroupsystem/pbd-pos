@@ -951,6 +951,7 @@ function openCustomerForm(c, onSaved, prefill) {
   const d = Object.assign({ country: 'ไทย', loc: S.loc }, c || {});
   if (isNew && prefill) { if (/^[0-9\- ]{6,}$/.test(prefill)) d.phone = prefill; else d.name = prefill; }
   const el = sheet(`${head(isNew ? 'สร้างลูกค้า' : 'แก้ไขลูกค้า')}
+    <button class="btn block" id="cidcard" style="margin-bottom:4px">🪪 สแกนบัตรประชาชน · กรอกชื่อและที่อยู่ให้</button>
     ${CUST_FIELDS.map(([k, label, type, max]) => `<label class="f">${label}</label>` + (k === 'code'
       ? `<div class="row"><input class="inp" id="c_${k}" maxlength="${max}" value="${esc(d[k] || '')}"><button class="btn" id="cscan">สแกน</button></div>`
       : `<input class="inp" id="c_${k}" type="${type}" maxlength="${max}" value="${esc(d[k] || '')}"${k === 'province' ? ' list="provList"' : ''}${k === 'zip' ? ' inputmode="numeric"' : ''}${k === 'phone' ? ' inputmode="tel"' : ''}>`)).join('')}
@@ -962,6 +963,18 @@ function openCustomerForm(c, onSaved, prefill) {
     openScanner((code) => { openCustomerForm(c, onSaved); Object.keys(keep).forEach((k) => { const i = $('#c_' + k); if (i) i.value = keep[k]; }); $('#c_code').value = code; });
   };
   function readForm() { const o = {}; CUST_FIELDS.forEach(([k]) => { o[k] = $('#c_' + k, el).value.trim(); }); return o; }
+  $('#cidcard', el).onclick = () => {
+    const keep = readForm(), locSel = $('#c_loc', el), lv = locSel ? locSel.value : '';
+    openIdCardScan((r) => {
+      openCustomerForm(c, onSaved);
+      const f = Object.assign(keep, Object.fromEntries(Object.entries(r).filter(([, v]) => v)));
+      f.country = f.country || 'ไทย';
+      Object.keys(f).forEach((k) => { const i = $('#c_' + k); if (i) i.value = f[k]; });
+      if (lv && $('#c_loc')) $('#c_loc').value = lv;
+      ['name', 'address', 'district', 'province'].forEach((k) => { if (r[k]) $('#c_' + k).classList.add('filled'); });
+      toast('กรอกจากบัตรแล้ว — ตรวจความถูกต้อง แล้วใส่เบอร์โทร/รหัสไปรษณีย์');
+    });
+  };
   $('#csave', el).onclick = () => {
     const f = readForm();
     if (!f.name) return toast('ใส่ชื่อลูกค้า', true);
@@ -1586,6 +1599,134 @@ async function openScanner(cb) {
     await SCAN.h5.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: 260, height: 140 } }, hit, () => {});
   } catch (e) {
     if ($('#scanArea')) area.innerHTML = `<div class="banner">เปิดกล้องไม่ได้: ${esc(e.message || e)}</div>`;
+  }
+}
+
+/* ---------- อ่านข้อความ OCR บัตรประชาชน → ชื่อ / ที่อยู่ / อำเภอ / จังหวัด ---------- */
+function parseIdCard(text, provinces) {
+  const T = String(text || '').replace(/\r/g, '').replace(/[ \t ]+/g, ' ');
+  const lines = T.split('\n').map((s) => s.trim()).filter(Boolean);
+  const out = { name: '', address: '', district: '', province: '' };
+  // ชื่อ: บรรทัด "ชื่อตัวและชื่อสกุล ..." หรือบรรทัดที่ขึ้นต้นด้วยคำนำหน้า
+  const TITLE = /^(นาย|นางสาว|นาง|น\.ส\.|ด\.ช\.|ด\.ญ\.|เด็กชาย|เด็กหญิง)\s*/;
+  for (let i = 0; i < lines.length && !out.name; i++) {
+    let l = lines[i];
+    const m = /ชื่อ\s*ตัว\s*และ\s*ชื่อ\s*สกุล\s*:?\s*(.*)$/.exec(l);
+    if (m) l = m[1] || lines[i + 1] || '';
+    else if (!TITLE.test(l)) continue;
+    l = l.replace(/[^ก-๙a-zA-Z.\s]/g, '').replace(/\s+/g, ' ').trim().replace(/^(นางสาว|นาย|นาง)\s+/, '$1');
+    if (/[ก-๙]{2,}/.test(l) && !/Name|Identification|ประจำตัว/.test(l)) out.name = l;
+  }
+  // ที่อยู่: ตั้งแต่ "ที่อยู่" จนเจอวันออกบัตร/วันหมดอายุ
+  let addr = '';
+  const ai = lines.findIndex((l) => /ที่\s*อยู่/.test(l));
+  if (ai >= 0) {
+    const buf = [lines[ai].replace(/^.*?ที่\s*อยู่\s*:?\s*/, '')];
+    for (let j = ai + 1; j < lines.length && buf.length < 4; j++) {
+      if (/วัน\s*ออก|Date of|วัน\s*บัตร|หมด\s*อายุ|Expiry|เจ้า\s*พนักงาน|^\d{1,2}\s*[ก-๙]{2,}\.?\s*\d{4}$/.test(lines[j])) break;
+      buf.push(lines[j]);
+    }
+    addr = buf.join(' ').replace(/\s+/g, ' ').trim();
+  }
+  if (!addr) return out;
+  // จังหวัด
+  let pm = /(?:จ\.|จังหวัด)\s*([ก-๙]+)/.exec(addr);
+  const findProv = (w) => provinces.find((p) => p === w) || provinces.find((p) => w && (p.startsWith(w) || w.startsWith(p)));
+  let prov = pm ? findProv(pm[1]) : '';
+  if (!prov) {
+    if (/กรุงเทพ/.test(addr)) prov = 'กรุงเทพมหานคร';
+    else prov = provinces.filter((p) => addr.includes(p)).sort((a, b) => b.length - a.length)[0] || '';
+  }
+  out.province = prov || (pm ? pm[1] : '');
+  // อำเภอ / เขต
+  const dm = /(?:อ\.|อำเภอ|เขต)\s*([ก-๙]+)/.exec(addr);
+  if (dm) out.district = dm[1];
+  // ที่อยู่ = ส่วนก่อนอำเภอ/เขต (บ้านเลขที่ หมู่ ซอย ถนน ตำบล/แขวง)
+  let cut = addr.length;
+  if (dm) cut = Math.min(cut, dm.index);
+  if (pm) cut = Math.min(cut, pm.index);
+  else if (prov && addr.indexOf(prov) >= 0) cut = Math.min(cut, addr.indexOf(prov));
+  out.address = addr.slice(0, cut).trim();
+  return out;
+}
+
+/* ---------- สแกนบัตรประชาชน (OCR) ---------- */
+// ตำแหน่งบนบัตร (สัดส่วนของกรอบ) ที่ปิดไว้ก่อนส่ง: แถบเลขบัตร/หัวบัตร และรูปหน้า
+const IDC = { W: 1200, R: 85.6 / 54, MASK: [[0, 0, 1, 0.29], [0.7, 0.36, 0.3, 0.64]] };
+function idcMask(ctx, w, h) {
+  ctx.fillStyle = '#fff';
+  IDC.MASK.forEach(([x, y, mw, mh]) => ctx.fillRect(x * w, y * h, mw * w, mh * h));
+}
+function openIdCardScan(onData) {
+  const el = sheet(`${head('สแกนบัตรประชาชน')}
+    <div class="idcam" id="idcam"><video playsinline muted></video>
+      <div class="idframe"><i class="c1"></i><i class="c2"></i><i class="c3"></i><i class="c4"></i>
+        <div class="idm idm1">เลขบัตร · ปิดไว้ ไม่ส่งออกจากเครื่อง</div><div class="idm idm2">รูปหน้า<br>ปิดไว้</div>
+        <div class="idh">ชื่อ-สกุล</div><div class="idh idh2">ที่อยู่</div></div>
+      <div class="idtip" id="idtip">กำลังเปิดกล้อง…</div></div>
+    <ul class="mut small idguide">
+      <li>ใช้ <b>ด้านหน้า</b>บัตร วางแนวนอนให้ขอบบัตรพอดีกรอบแดง</li>
+      <li>ให้ชื่อ-สกุลและที่อยู่อยู่ตรงป้ายในกรอบ · ถือนิ่ง ๆ ให้ตัวหนังสือคมชัด</li>
+      <li>เลี่ยงแสงสะท้อนบนบัตร · วางบนพื้นสีเข้ม เรียบ</li>
+    </ul>
+    <div class="row" style="gap:8px;margin-top:10px">
+      <button class="btn" id="idfile" style="flex:0 0 auto">เลือกรูป</button>
+      <button class="btn pri" id="idsnap" style="flex:1">ถ่ายบัตร</button></div>
+    <input type="file" accept="image/*" capture="environment" id="idin" class="hidden">`, { onClose: stopScan });
+  const vid = $('video', el), tip = $('#idtip', el);
+  (async () => {
+    try {
+      SCAN.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false });
+      vid.srcObject = SCAN.stream; await vid.play();
+      tip.textContent = 'วางบัตรให้พอดีกรอบ แล้วกด "ถ่ายบัตร"';
+    } catch (e) { tip.textContent = 'เปิดกล้องไม่ได้ — กด "เลือกรูป" เพื่อถ่าย/เลือกรูปบัตรแทน'; }
+  })();
+  const toCard = (src, sx, sy, sw, sh) => {
+    const c = document.createElement('canvas'); c.width = IDC.W; c.height = Math.round(IDC.W / IDC.R);
+    const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
+    x.drawImage(src, sx, sy, sw, sh, 0, 0, c.width, c.height);
+    idcMask(x, c.width, c.height);
+    return c;
+  };
+  $('#idsnap', el).onclick = () => {
+    if (!vid.videoWidth) return $('#idin', el).click();
+    // แปลงตำแหน่งกรอบบนจอ → พิกัดในภาพจากกล้อง (video ใช้ object-fit: cover)
+    const box = $('#idcam', el).getBoundingClientRect(), fr = $('.idframe', el).getBoundingClientRect();
+    const sc = Math.max(box.width / vid.videoWidth, box.height / vid.videoHeight);
+    const ox = (box.width - vid.videoWidth * sc) / 2, oy = (box.height - vid.videoHeight * sc) / 2;
+    const card = toCard(vid, (fr.left - box.left - ox) / sc, (fr.top - box.top - oy) / sc, fr.width / sc, fr.height / sc);
+    confirmCard(card);
+  };
+  $('#idfile', el).onclick = () => $('#idin', el).click();
+  $('#idin', el).onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    const url = URL.createObjectURL(f);
+    try {
+      const im = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
+      // รูปจากเครื่อง: ตัดกลางภาพตามสัดส่วนบัตร (ถ่ายให้บัตรเต็มภาพ)
+      let w = im.width, h = w / IDC.R; if (h > im.height) { h = im.height; w = h * IDC.R; }
+      confirmCard(toCard(im, (im.width - w) / 2, (im.height - h) / 2, w, h));
+    } finally { URL.revokeObjectURL(url); }
+  };
+  function confirmCard(card) {
+    stopScan();
+    const data = card.toDataURL('image/jpeg', 0.88);
+    const s2 = sheet(`${head('ตรวจรูปบัตร')}
+      <img src="${data}" style="width:100%;border-radius:10px;background:#fff">
+      <div class="mut small" style="margin:8px 0">ส่วนสีขาวคือเลขบัตรและรูปหน้าที่ปิดไว้ · ตัวหนังสือชื่อและที่อยู่ต้องอ่านออกชัด</div>
+      <div class="row" style="gap:8px"><button class="btn" id="idre" style="flex:0 0 auto">ถ่ายใหม่</button>
+      <button class="btn pri" id="idok" style="flex:1">อ่านข้อมูล</button></div>`);
+    $('#idre', s2).onclick = () => openIdCardScan(onData);
+    $('#idok', s2).onclick = async (e) => {
+      if (!navigator.onLine) return toast('ต้องต่ออินเทอร์เน็ตเพื่ออ่านบัตร', true);
+      e.target.disabled = true; e.target.textContent = 'กำลังอ่าน…';
+      try {
+        const j = await api('ocrIdCard', { image: data });
+        const r = parseIdCard(j.text, PROVINCES);
+        if (!r.name && !r.address) throw new Error('อ่านชื่อ/ที่อยู่ไม่ได้ — ถ่ายใหม่ให้ชัดและพอดีกรอบ');
+        closeSheet(); onData(r);
+      } catch (x) { e.target.disabled = false; e.target.textContent = 'อ่านข้อมูล'; toast(x.message, true); }
+    };
   }
 }
 
