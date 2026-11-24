@@ -1389,8 +1389,14 @@ function renderSettings(v) {
       </select>
       <label class="f">ขนาดกระดาษ</label>
       <div class="seg" style="grid-template-columns:1fr 1fr"><button data-pp="58">58 mm</button><button data-pp="80">80 mm</button></div>
+      <div id="rawBox" class="${p.mode === 'rawbt' ? '' : 'hidden'}" style="margin-top:10px">
+        <button class="btn block" id="rawOpen">เปิด RawBT เพื่อเลือกเครื่องพิมพ์</button>
+        <div class="mut small" style="margin-top:6px">เลือกเครื่องพิมพ์ในแอป RawBT (รายการ Bluetooth ที่จับคู่ไว้ในเครื่อง) · SUNMI เลือก "InnerPrinter" (เครื่องพิมพ์ในตัว)</div>
+      </div>
       <div id="bleBox" class="${p.mode === 'ble' ? '' : 'hidden'}">
-        <div class="row"><span class="sp small" id="bleSt"></span><button class="btn" id="bleC">เชื่อมต่อ</button></div>
+        <div class="row"><span class="sp small" id="bleSt"></span><button class="btn" id="bleC">ค้นหาเครื่องพิมพ์</button></div>
+        <label class="f">เครื่องพิมพ์ที่เคยเชื่อมต่อ</label>
+        <div class="list" id="bleList"><div class="mut small">กำลังโหลด…</div></div>
         <label class="f">ขนาดก้อนข้อมูล (ลดลงถ้าพิมพ์ขาด/ค้าง)</label>
         <select class="inp" id="ck">${[20, 100, 180, 512].map((n) => `<option ${p.chunk === n ? 'selected' : ''}>${n}</option>`).join('')}</select>
       </div>
@@ -1408,8 +1414,14 @@ function renderSettings(v) {
   $$('[data-pp]', v).forEach((b) => { b.classList.toggle('on', +b.dataset.pp === +p.paper); b.onclick = () => { p.paper = +b.dataset.pp; savePrn(); render(); }; });
   $('#ap', v).onchange = (e) => { p.auto = e.target.checked; savePrn(); };
   const ck = $('#ck', v); if (ck) ck.onchange = (e) => { p.chunk = +e.target.value; savePrn(); };
-  $('#bleC', v).onclick = async () => { try { await bleConnect(); toast('เชื่อมต่อเครื่องพิมพ์แล้ว'); } catch (e) { toast(e.message, true); } bleStatus(); };
+  $('#bleC', v).onclick = async () => { try { await bleConnect(); toast('เชื่อมต่อเครื่องพิมพ์แล้ว'); } catch (e) { toast(e.message, true); } bleStatus(); bleKnown(v); };
   bleStatus();
+  if (p.mode === 'ble') bleKnown(v);
+  const ro = $('#rawOpen', v);
+  if (ro) ro.onclick = () => {
+    const fb = encodeURIComponent('https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter');
+    location.href = 'intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=ru.a402d.rawbtprinter;S.browser_fallback_url=' + fb + ';end;';
+  };
   $('#tp', v).onclick = () => printOps(testOps());
   $('#rd', v).onclick = () => refreshData(true);
   $('#sy', v).onclick = () => syncNow(true);
@@ -2354,6 +2366,30 @@ async function bleAttach(dev) {
     }
   }
   throw new Error('ไม่พบช่องส่งข้อมูลของเครื่องพิมพ์ — ลองใช้ RawBT');
+}
+/** รายการเครื่องพิมพ์ Bluetooth ที่เคยอนุญาตให้แอปนี้ใช้ (Chrome Android) */
+async function bleKnown(v) {
+  const box = $('#bleList', v);
+  if (!box) return;
+  if (!navigator.bluetooth) { box.innerHTML = '<div class="mut small">เบราว์เซอร์นี้ไม่รองรับ Bluetooth — ใช้ Chrome บน Android หรือเลือก RawBT</div>'; return; }
+  if (!navigator.bluetooth.getDevices) { box.innerHTML = '<div class="mut small">Chrome รุ่นนี้ยังไม่แสดงรายการที่เคยเชื่อมต่อ — กด "ค้นหาเครื่องพิมพ์" เพื่อเลือกจากรายการใกล้เคียง</div>'; return; }
+  let devs = [];
+  try { devs = await navigator.bluetooth.getDevices(); } catch (x) {}
+  const cur = store.get('bleName', '');
+  box.innerHTML = devs.length ? devs.map((d, i) => `<div class="li"><span class="sp">${esc(d.name || 'ไม่มีชื่อ')}${d.name === cur ? ' <span class="tag ok">ใช้อยู่</span>' : ''}</span>
+      <button class="btn" data-bu="${i}" style="flex:none">ใช้เครื่องนี้</button>${d.forget ? `<button class="btn" data-bf="${i}" style="flex:none">ลืม</button>` : ''}</div>`).join('')
+    : '<div class="mut small">ยังไม่มี — กด "ค้นหาเครื่องพิมพ์" (Chrome จะแสดงเครื่อง Bluetooth ใกล้เคียงให้เลือก)</div>';
+  $$('[data-bu]', box).forEach((b) => { b.onclick = async () => {
+    try { BLE.ch = null; BLE.dev = null; await bleAttach(devs[+b.dataset.bu]); toast('เชื่อมต่อ ' + (devs[+b.dataset.bu].name || '') + ' แล้ว'); }
+    catch (e) { toast('เชื่อมต่อไม่ได้: ' + e.message + ' — เปิดเครื่องพิมพ์ให้อยู่ใกล้ แล้วลองใหม่', true); }
+    bleStatus(); bleKnown(v);
+  }; });
+  $$('[data-bf]', box).forEach((b) => { b.onclick = async () => {
+    const d = devs[+b.dataset.bf];
+    try { await d.forget(); } catch (x) {}
+    if (d.name === cur) store.del('bleName');
+    bleKnown(v);
+  }; });
 }
 async function bleConnect() {
   if (!navigator.bluetooth) throw new Error('เบราว์เซอร์นี้ไม่รองรับ Bluetooth — ใช้ Chrome บน Android หรือเลือก RawBT');
