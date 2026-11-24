@@ -4,5 +4,5 @@ window.POS_CONFIG = {
   API_URL: 'https://script.google.com/macros/s/AKfycbzg7u1yRylCFLkQmyZUK5TkWMltHsgs71V70bDFeJszmAysH3ZkxYPRFk6zkrTVRH6F/exec',
   // LIFF ID ที่ Endpoint URL ชี้มาที่หน้านี้บน GitHub Pages (scope: openid, profile)
   LIFF_ID: '2012225566-EItPzpdH',
-  APP_VERSION: '1.8.1'
+  APP_VERSION: '1.9.0'
 };

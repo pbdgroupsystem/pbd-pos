@@ -278,20 +278,22 @@ async function startLogin() {
     if (!idToken) throw new Error('LINE ไม่ส่ง ID token — เปิด scope openid ในการตั้งค่า LIFF');
     msg.textContent = 'กำลังตรวจสิทธิ์…';
     const t0 = Date.now();
+    let pic = '';
+    try { pic = (liff.getDecodedIDToken() || {}).picture || ''; } catch (x) {}
     const j = await api('login', { idToken });
-    finishLogin(j, t0);
+    finishLogin(j, t0, pic);
   } catch (e) {
     store.del('loginPending');
     msg.textContent = e.message;
   }
 }
 
-function finishLogin(j, t0) {
+function finishLogin(j, t0, pic) {
   if (S.session && S.session.user && S.session.user.id !== j.user.id) {
     S.cart = S.cart.filter((l) => !isCollect(l)); saveCart(); S.report = null;
     S.customers = S.customers.filter((c) => c.dirty); setCartCust('');
   }
-  S.session = { token: j.token, user: j.user };
+  S.session = { token: j.token, user: j.user, picture: j.picture || pic || '' };
   store.set('session', S.session);
   applyData(j, t0);
   S.authLost = false;
@@ -335,7 +337,7 @@ async function startQrLogin() {
         const t0 = Date.now();
         const r = await api('qrPoll', { code: j.code });
         if (!QR || QR.code !== j.code) return;
-        if (r.status === 'ok') return finishLogin(r, t0);
+        if (r.status === 'ok') return finishLogin(r, t0, r.picture);
         if (r.status === 'expired') { QR.end = 0; return tick(); }
       } catch (e) { /* เน็ตสะดุด ลองใหม่รอบหน้า */ }
       if (QR && QR.code === j.code) QR.timer = setTimeout(tick, 2500);
@@ -368,7 +370,7 @@ function checkPair() {
   $('#pOk', el).onclick = async (e) => {
     e.target.disabled = true;
     try {
-      const r = await api('qrApprove', { code });
+      const r = await api('qrApprove', { code, picture: S.session.picture || '' });
       closeSheet();
       toast(`เครื่องขาย${r.model ? ' ' + r.model : ''} เข้าสู่ระบบแล้ว`);
     } catch (x) { e.target.disabled = false; toast(x.message, true); }
@@ -389,6 +391,31 @@ function logout() {
 }
 
 function showLogin() { $('#app').classList.add('hidden'); $('#login').classList.remove('hidden'); }
+/** หัวแอป: รูปโปรไฟล์ LINE + ชื่อผู้ใช้ (ไม่มีรูป = ตัวอักษรแรกของชื่อ) */
+function drawMe() {
+  const u = user(), pic = (S.session && S.session.picture) || '', box = $('#me');
+  if (!box) return;
+  const key = (u.name || '') + '|' + pic;
+  if (box.dataset.k === key) return;
+  box.dataset.k = key;
+  const nm = u.name || '?', th = /[ก-ฮ]/.exec(nm);
+  const init = esc(th ? th[0] : (Array.from(nm.replace(/^[^A-Za-z]+/, ''))[0] || '?'));
+  box.innerHTML = `${pic ? `<img class="av" src="${esc(pic)}" alt="" referrerpolicy="no-referrer">` : `<span class="av">${init}</span>`}
+    <span class="who"><span class="nm">${esc(u.name || '-')}</span><span class="sub">PBD <b>POS</b> · ${esc(ROLE_TH[u.role] || u.role || '')}</span></span>`;
+  const img = $('img.av', box);
+  if (img) img.onerror = () => { img.outerHTML = `<span class="av">${init}</span>`; };
+}
+// ผู้ใช้ที่ล็อกอินไว้ก่อนมีรูปโปรไฟล์: ถ้าเปิดใน LINE ดึงรูปให้เงียบ ๆ
+async function fillPicture() {
+  if (!S.session || S.session.picture || typeof liff === 'undefined' || !navigator.onLine) return;
+  try {
+    await liff.init({ liffId: CFG.LIFF_ID });
+    if (!liff.isLoggedIn()) return;
+    const pic = (liff.getDecodedIDToken() || {}).picture || '';
+    if (pic && S.session) { S.session.picture = pic; store.set('session', S.session); drawMe(); }
+  } catch (x) { /* ไม่เป็นไร ใช้ตัวอักษรแทน */ }
+}
+
 function showApp() { $('#login').classList.add('hidden'); $('#app').classList.remove('hidden'); render(); }
 
 /* ---------- catalog & cart ---------- */
@@ -750,6 +777,7 @@ function renderBadge() {
   p.classList.toggle('hidden', !n && !S.syncing);
   $('#netDot').classList.toggle('off', !navigator.onLine);
   $('#teamName').textContent = S.loc ? locName(S.loc) : 'เลือกทีม';
+  drawMe();
 }
 
 function renderCartBar() {
@@ -2075,6 +2103,7 @@ function boot() {
   if (pc) store.set('pair', pc);
   $('#loginBtn').onclick = startLogin;
   $('#qrBtn').onclick = startQrLogin;
+  $('#me').onclick = () => go('settings');
   $('#qrNew').onclick = startQrLogin;
   $('#teamBtn').onclick = openTeamPicker;
   $('#cartbar').onclick = openCart;
@@ -2092,6 +2121,7 @@ function boot() {
     syncNow();
     refreshData();
     checkPair();
+    if (/Line\//i.test(navigator.userAgent)) fillPicture();
   } else {
     showLogin();
     if (store.get('loginPending', 0) || /[?&](code|liff\.state)=/.test(location.search)) startLogin();

@@ -47,6 +47,13 @@ header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:8px;
   backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
 .brand{font-family:Kanit;font-weight:600;font-size:18px;letter-spacing:.3px}
 .brand b{color:var(--red)}
+.me{display:flex;align-items:center;gap:9px;min-width:0;background:none;border:0;padding:0;color:inherit;text-align:left;font:inherit}
+.me .av{width:38px;height:38px;border-radius:50%;object-fit:cover;flex:none;background:var(--card2);border:2px solid var(--red);
+  display:grid;place-items:center;font-family:Kanit;font-weight:600;font-size:16px}
+.me .who{display:flex;flex-direction:column;min-width:0;line-height:1.2}
+.me .nm{font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:44vw}
+.me .sub{font-size:11px;color:var(--mut);white-space:nowrap;font-family:Kanit}
+.me .sub b{color:var(--red);font-weight:600}
 .teambtn{margin-left:auto;display:flex;align-items:center;gap:6px;background:var(--card2);
   border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-weight:600;max-width:46vw;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -191,7 +198,7 @@ textarea.inp{resize:vertical;min-height:70px}
 
 <div id="app" class="hidden">
   <header>
-    <div class="brand">PBD <b>POS</b></div>
+    <button class="me" id="me" aria-label="บัญชีของฉัน"></button>
     <span id="pend" class="pend hidden"></span>
     <button class="teambtn" id="teamBtn"><span class="dot" id="netDot"></span><span id="teamName">-</span></button>
   </header>
