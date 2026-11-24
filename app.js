@@ -1445,10 +1445,12 @@ function renderSettings(v) {
     const sel = $('#rtg', v);
     if (!sel) return;
     try {
-      const j = await api('printReceivers', {});
+      if (!S.loc) { sel.innerHTML = '<option value="">เลือกทีมก่อน (มุมขวาบน)</option>'; return; }
+      const j = await api('printReceivers', { loc: S.loc });   // เห็นเฉพาะเครื่องรับในสาขาเดียวกับทีมที่เลือกอยู่
       const rs = (j.receivers || []).filter((r) => r.device !== S.device);
+      if (p.target && !rs.some((r) => r.device === p.target)) { p.target = ''; p.targetName = ''; savePrn(); }   // เครื่องเดิมอยู่สาขาอื่น/ออฟไลน์
       sel.innerHTML = rs.length ? `<option value="">— เลือกเครื่อง —</option>` + rs.map((r) => `<option value="${esc(r.device)}" ${r.device === p.target ? 'selected' : ''}>${esc(r.name)}${r.loc ? ' · ' + esc(locName(r.loc)) : ''}</option>`).join('')
-        : `<option value="">ไม่พบเครื่องที่เปิดรับงานอยู่</option>`;
+        : `<option value="">ไม่พบเครื่องรับงานในสาขานี้ที่เปิดอยู่</option>`;
     } catch (e) { sel.innerHTML = `<option value="">${esc(e.message)}</option>`; }
   };
   if (p.mode === 'relay') {
@@ -2575,7 +2577,7 @@ async function relaySend(ops) {
   if (!navigator.onLine) { toast('ต้องต่ออินเทอร์เน็ตเพื่อส่งไปพิมพ์', true); return; }
   try {
     toast('กำลังส่งไปพิมพ์…');
-    const r = await api('printSend', { target: p.target, ops: packOps(ops) });
+    const r = await api('printSend', { target: p.target, loc: S.loc || '', ops: packOps(ops) });
     toast('ส่งไปพิมพ์ที่ ' + (r.name || p.targetName || 'เครื่องรับ') + ' แล้ว');
   } catch (e) { toast('ส่งไปพิมพ์ไม่ได้: ' + e.message, true); }
 }
