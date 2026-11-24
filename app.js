@@ -38,7 +38,7 @@ const S = {
   cartCust: store.get('cartCust', ''),
   bills: store.get('bills', []),
   shifts: store.get('shifts', []),
-  prn: Object.assign({ mode: /Android/i.test(navigator.userAgent) ? 'rawbt' : 'share', paper: 58, auto: false, chunk: 100 },
+  prn: Object.assign({ mode: /Android/i.test(navigator.userAgent) ? 'rawbt' : 'share', paper: 58, auto: false, chunk: 100 }, store.get('prn_bak', {}),
     store.get('prn', {})),
   device: store.get('device', ''),
   view: 'sell', cat: '', q: '',
@@ -58,7 +58,7 @@ function saveShifts() {
   store.set('shifts', S.shifts);
 }
 const saveCart = () => store.set('cart', S.cart);
-const savePrn = () => store.set('prn', S.prn);
+const savePrn = () => { const ok = store.set('prn', S.prn); store.set('prn_bak', S.prn); return ok; };
 
 /* ---------- ui helpers ---------- */
 let toastTimer;
@@ -1417,7 +1417,9 @@ function renderSettings(v) {
         <select class="inp" id="ck">${[20, 100, 180, 512].map((n) => `<option ${p.chunk === n ? 'selected' : ''}>${n}</option>`).join('')}</select>
       </div>
       <label class="row" style="margin-top:12px"><input type="checkbox" id="ap" ${p.auto ? 'checked' : ''}><span>พิมพ์อัตโนมัติหลังขายเสร็จ</span></label>
-      <button class="btn block" id="tp" style="margin-top:10px">พิมพ์ทดสอบ</button></div>
+      <button class="btn block" id="tp" style="margin-top:10px">พิมพ์ทดสอบ</button>
+      <button class="btn pri block" id="prnSave" style="margin-top:8px">บันทึกการตั้งค่าเครื่องพิมพ์</button>
+      <div class="mut small" style="margin-top:6px;text-align:center">${p.savedAt ? 'บันทึกล่าสุด ' + dt(p.savedAt) + ' · ' : ''}จำค่าไว้ในเครื่องนี้จนกว่าจะเปลี่ยน</div></div>
     <div class="card"><h3 style="font-size:16px">ข้อมูล</h3><div class="list">
       <div class="li"><span class="sp">สินค้า/ราคา อัปเดตล่าสุด</span><span class="mut small">${S.data && S.data.at ? dt(S.data.at) : '-'}</span></div>
       <div class="li"><span class="sp">บิลรอส่ง</span><span class="num">${pendingBills().length}</span></div>
@@ -1440,7 +1442,20 @@ function renderSettings(v) {
   const rcv = $('#rcv', v);
   if (rcv) rcv.onchange = (e) => { p.recv = e.target.checked; savePrn(); recvLoop(); render(); };
   const rcn = $('#rcn', v);
-  if (rcn) rcn.onchange = (e) => { p.recvName = e.target.value.trim(); savePrn(); };
+  if (rcn) rcn.oninput = rcn.onchange = (e) => { p.recvName = e.target.value.trim(); savePrn(); };
+  $('#prnSave', v).onclick = () => {   // บันทึกค่าทั้งหมดในการ์ดนี้ (จำไว้ในเครื่องจนกว่าจะเปลี่ยน)
+    const g = (id) => $(id, v);
+    if (g('#pm')) p.mode = g('#pm').value;
+    if (g('#ap')) p.auto = g('#ap').checked;
+    if (g('#ck')) p.chunk = +g('#ck').value;
+    if (g('#rws')) p.ws = g('#rws').checked;
+    if (g('#rcv')) p.recv = g('#rcv').checked;
+    if (g('#rcn')) p.recvName = g('#rcn').value.trim();
+    const t = g('#rtg'); if (t && t.value) { p.target = t.value; p.targetName = t.selectedOptions[0] ? t.selectedOptions[0].textContent.replace(/ \(ยังไม่ออนไลน์ตอนนี้\)$/, '') : p.targetName; }
+    p.savedAt = Date.now();
+    if (savePrn()) { store.set('prn_bak', S.prn); toast('บันทึกการตั้งค่าเครื่องพิมพ์แล้ว — จำไว้จนกว่าจะเปลี่ยน'); } else toast('บันทึกไม่ได้ (พื้นที่ในเครื่องเต็ม)', true);
+    recvLoop(); render();
+  };
   const loadRecv = async () => {
     const sel = $('#rtg', v);
     if (!sel) return;
@@ -1448,15 +1463,16 @@ function renderSettings(v) {
       if (!S.loc) { sel.innerHTML = '<option value="">เลือกทีมก่อน (มุมขวาบน)</option>'; return; }
       const j = await api('printReceivers', { loc: S.loc });   // เห็นเฉพาะเครื่องรับในสาขาเดียวกับทีมที่เลือกอยู่
       const rs = (j.receivers || []).filter((r) => r.device !== S.device);
-      if (p.target && !rs.some((r) => r.device === p.target)) { p.target = ''; p.targetName = ''; savePrn(); }   // เครื่องเดิมอยู่สาขาอื่น/ออฟไลน์
-      sel.innerHTML = rs.length ? `<option value="">— เลือกเครื่อง —</option>` + rs.map((r) => `<option value="${esc(r.device)}" ${r.device === p.target ? 'selected' : ''}>${esc(r.name)}${r.loc ? ' · ' + esc(locName(r.loc)) : ''}</option>`).join('')
+      // เครื่องที่บันทึกไว้: จำไว้เสมอแม้ตอนนี้ออฟไลน์ (เปลี่ยนเมื่อผู้ใช้เลือกเครื่องใหม่เท่านั้น)
+      const saved = p.target && !rs.some((r) => r.device === p.target) ? `<option value="${esc(p.target)}" selected>${esc(p.targetName || p.target)} (ยังไม่ออนไลน์ตอนนี้)</option>` : '';
+      sel.innerHTML = rs.length || saved ? `<option value="">— เลือกเครื่อง —</option>` + saved + rs.map((r) => `<option value="${esc(r.device)}" ${r.device === p.target ? 'selected' : ''}>${esc(r.name)}${r.loc ? ' · ' + esc(locName(r.loc)) : ''}</option>`).join('')
         : `<option value="">ไม่พบเครื่องรับงานในสาขานี้ที่เปิดอยู่</option>`;
     } catch (e) { sel.innerHTML = `<option value="">${esc(e.message)}</option>`; }
   };
   if (p.mode === 'relay') {
     loadRecv();
     $('#rtr', v).onclick = loadRecv;
-    $('#rtg', v).onchange = (e) => { p.target = e.target.value; p.targetName = e.target.selectedOptions[0] ? e.target.selectedOptions[0].textContent : ''; savePrn(); if (p.target) toast('จะส่งงานพิมพ์ไปที่ ' + p.targetName); };
+    $('#rtg', v).onchange = (e) => { p.target = e.target.value; p.targetName = e.target.selectedOptions[0] ? e.target.selectedOptions[0].textContent.replace(/ \(ยังไม่ออนไลน์ตอนนี้\)$/, '') : ''; savePrn(); if (p.target) toast('จะส่งงานพิมพ์ไปที่ ' + p.targetName); };
   }
   const ro = $('#rawOpen', v);
   if (ro) ro.onclick = () => {
