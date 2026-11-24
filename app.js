@@ -1830,29 +1830,44 @@ function renderLoan(v) {
   if (!S.sctx) return stockWait(v, () => loadCtx());
   const teams = loanTeams();
   if (!teams.length) { v.innerHTML = '<div class="card mut">บัญชีนี้ยังไม่ได้อยู่ในทีม — ให้ Admin ตั้งทีมในหน้าจัดการผู้ใช้</div>'; return; }
-  const tab = S.loanTab || 'ISSUE';
+  // ยืม = ยืมของจากทีมอื่นในสาขาเดียวกันเข้าทีมเรา · คืน = คืนของให้ทีมที่ยืมมา (เอกสารโอนระหว่างทีม ย้ายสต็อกทันที)
+  const tab = ['BORROW', 'GIVEBACK', 'HIST'].indexOf(S.loanTab) >= 0 ? S.loanTab : 'BORROW';
   if (teams.indexOf(S.loanTeam) < 0) S.loanTeam = teams.indexOf(S.loc) >= 0 ? S.loc : teams[0];
   const team = S.loanTeam, br = teamBranch(team);
-  const tabs = `<div class="chips" style="margin-bottom:8px">${[['ISSUE', 'ยืม (เบิกเข้าทีม)'], ['RETURN', 'คืน (คืนสโตร์)'], ['HIST', 'ประวัติ']].map(([k, t]) =>
+  const others = ((S.sctx && S.sctx.teams) || []).filter((t) => t.parent === br && t.id !== team).map((t) => t.id);
+  if (others.indexOf(S.loanOther) < 0) S.loanOther = others[0] || '';
+  const other = S.loanOther;
+  const tabs = `<div class="chips" style="margin-bottom:8px">${[['BORROW', 'ยืม (จากทีมอื่น)'], ['GIVEBACK', 'คืน (ให้ทีมที่ยืม)'], ['HIST', 'ประวัติ']].map(([k, t]) =>
     `<button class="chip ${tab === k ? 'on' : ''}" data-lt="${k}">${t}</button>`).join('')}</div>
-    <select class="inp" id="lteam" style="margin-bottom:8px" ${teams.length < 2 ? 'disabled' : ''}>${teams.map((id) => `<option value="${esc(id)}" ${id === team ? 'selected' : ''}>${esc(sName(id))}</option>`).join('')}</select>`;
+    <label class="f" style="margin-top:0">ทีมของเรา</label>
+    <select class="inp" id="lteam" style="margin-bottom:8px" ${teams.length < 2 ? 'disabled' : ''}>${teams.map((id) => `<option value="${esc(id)}" ${id === team ? 'selected' : ''}>${esc(sName(id))}</option>`).join('')}</select>
+    ${tab !== 'HIST' && others.length ? `<label class="f" style="margin-top:0">${tab === 'BORROW' ? 'ยืมจากทีม' : 'คืนให้ทีม'}</label>
+    <select class="inp" id="lother" style="margin-bottom:8px">${others.map((id) => `<option value="${esc(id)}" ${id === other ? 'selected' : ''}>${esc(sName(id))}</option>`).join('')}</select>` : ''}`;
   const bind = () => {
     $$('[data-lt]', v).forEach((b) => { b.onclick = () => { S.loanTab = b.dataset.lt; render(); }; });
     $('#lteam', v).onchange = (e) => { S.loanTeam = e.target.value; S.loanLines = []; render(); };
+    const lo = $('#lother', v);
+    if (lo) lo.onchange = (e) => { S.loanOther = e.target.value; S.loanLines = []; render(); };
+  };
+  const docKind = (d) => {   // ป้ายประวัติ เทียบกับทีมของเรา
+    if (d.type === 'ISSUE') return ['เบิกสโตร์', 'ok'];
+    if (d.type === 'RETURN') return ['คืนสโตร์', 'wait'];
+    const back = /^POS คืน/.test(d.note || '');
+    return d.to === team ? [back ? 'รับคืน' : 'ยืมเข้า', 'ok'] : [back ? 'คืนออก' : 'ให้ยืม', 'wait'];
   };
   if (tab === 'HIST') {
     const h = S.loanHist && S.loanHist.team === team ? S.loanHist : null;
     if (!h) {
       v.innerHTML = `${banners()}${tabs}<div class="card mut">กำลังโหลดประวัติ…</div>`;
       bind();
-      api('stockDocs', { loc: team, days: 30 }).then((j) => { S.loanHist = { team, docs: j.docs || [] }; if (S.view === 'loan') render(); })
+      api('stockDocs', { loc: team, days: 90 }).then((j) => { S.loanHist = { team, docs: j.docs || [] }; if (S.view === 'loan') render(); })
         .catch((e) => toast(e.message, true));
       return;
     }
     v.innerHTML = `${banners()}${tabs}
-      <div class="row" style="margin-bottom:6px"><span class="mut small sp">30 วันล่าสุด · ${h.docs.length} รายการ</span><button class="btn" id="hr" style="flex:none">รีเฟรช</button></div>
+      <div class="row" style="margin-bottom:6px"><span class="mut small sp">90 วันล่าสุด · ${h.docs.length} รายการ</span><button class="btn" id="hr" style="flex:none">รีเฟรช</button></div>
       <div class="card list">${h.docs.map((d) => `<div class="li" style="display:block">
-        <div class="row"><span class="tag ${d.type === 'ISSUE' ? 'ok' : 'wait'}">${d.type === 'ISSUE' ? 'ยืม' : 'คืน'}</span>
+        <div class="row"><span class="tag ${docKind(d)[1]}">${docKind(d)[0]}</span>
           <span class="sp num">${esc(d.date)}</span><b class="num">${d.total} ชิ้น</b></div>
         <div class="mut small">${esc(d.id)} · ${esc(sName(d.from))} → ${esc(sName(d.to))} · ${esc(d.by)}</div>
         <div class="small">${d.lines.map((l) => esc(l.name) + ' ×' + l.qty).join(', ')}</div>
@@ -1861,27 +1876,43 @@ function renderLoan(v) {
     $('#hr', v).onclick = () => { S.loanHist = null; render(); };
     return;
   }
-  const from = tab === 'ISSUE' ? br : team, to = tab === 'ISSUE' ? team : br;
+  if (!other) { v.innerHTML = `${banners()}${tabs}<div class="card mut">สาขานี้ไม่มีทีมอื่นให้ยืม-คืน</div>`; bind(); return; }
+  const from = tab === 'BORROW' ? other : team, to = tab === 'BORROW' ? team : other;
+  // ยอดค้างคืน (ยืมจากทีมนั้น − คืนแล้ว) จากประวัติ 90 วัน
+  if (tab === 'GIVEBACK' && !(S.loanHist && S.loanHist.team === team)) {
+    v.innerHTML = `${banners()}${tabs}<div class="card mut">กำลังโหลดยอดค้างคืน…</div>`; bind();
+    api('stockDocs', { loc: team, days: 90 }).then((j) => { S.loanHist = { team, docs: j.docs || [] }; if (S.view === 'loan') render(); }).catch((e) => toast(e.message, true));
+    return;
+  }
+  const owe = {};
+  if (tab === 'GIVEBACK') (S.loanHist.docs || []).forEach((d) => {
+    if (d.type !== 'T2T') return;
+    const sign = d.from === other && d.to === team && !/^POS คืน/.test(d.note || '') ? 1 : d.from === team && d.to === other && /^POS คืน/.test(d.note || '') ? -1 : 0;
+    if (sign) (d.lines || []).forEach((l) => { owe[l.name] = (owe[l.name] || 0) + sign * l.qty; });
+  });
+  const oweList = Object.keys(owe).filter((k) => owe[k] > 0);
   const src = S.stock[from];
   if (!src) { v.innerHTML = `${banners()}${tabs}<div class="card mut">กำลังโหลดสต็อก ${esc(sName(from))}…</div>`; bind();
     loadStock(from).then(() => { if (S.view === 'loan') render(); }).catch((e) => toast(e.message, true)); return; }
-  if (S.loanKey !== tab + team) { S.loanKey = tab + team; S.loanLines = []; S.loanNote = ''; }
+  if (S.loanKey !== tab + team + other) { S.loanKey = tab + team + other; S.loanLines = []; S.loanNote = ''; }
   const lines = S.loanLines || (S.loanLines = []);
   const have = (id) => Number(src.qty[id] || 0);
   const tot = lines.reduce((a, l) => a + l.qty, 0);
   v.innerHTML = `${banners()}${tabs}
     <div class="card" style="margin-bottom:8px"><div class="row"><span class="sp">${esc(sName(from))}</span><span class="mut">→</span><span class="sp" style="text-align:right">${esc(sName(to))}</span></div>
-      <div class="mut small">${tab === 'ISSUE' ? 'เบิกของจากสโตร์สาขาเข้าทีม' : 'คืนของจากทีมเข้าสโตร์สาขา'} · ตัดสต็อกทันทีเมื่อยืนยัน</div></div>
+      <div class="mut small">${tab === 'BORROW' ? 'ยืมของจากทีม ' + esc(sName(other)) + ' เข้าทีมเรา' : 'คืนของให้ทีม ' + esc(sName(other))} · ย้ายสต็อกทันทีเมื่อยืนยัน</div></div>
+    ${tab === 'GIVEBACK' ? `<div class="card" style="margin-bottom:8px"><div class="row"><b class="sp" style="font-size:14px">ค้างคืนทีม ${esc(sName(other))}</b>${oweList.length ? '<button class="btn" id="lall" style="flex:none;padding:6px 12px">ใส่ทั้งหมด</button>' : ''}</div>
+      <div class="small ${oweList.length ? '' : 'mut'}" style="margin-top:4px">${oweList.length ? oweList.map((k) => esc(k) + ' ×' + owe[k]).join(', ') : 'ไม่มียอดค้างคืน (ดูจากประวัติ 90 วัน)'}</div></div>` : ''}
     <div class="row" style="gap:8px;margin-bottom:6px"><button class="btn pri" id="ladd" style="flex:1">+ เพิ่มสินค้า</button>
       <button class="iconbtn" id="lscan" aria-label="สแกน"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8v8M10 8v8M14 8v8M17 8v8"/></svg></button></div>
     <div class="card">${lines.map((l, i) => `<div class="ln"><div class="sp"><div>${esc(sItem(l.itemId).name)}</div>
-        <div class="small ${tab === 'ISSUE' && l.qty > have(l.itemId) ? '' : 'mut'}" ${tab === 'ISSUE' && l.qty > have(l.itemId) ? 'style="color:var(--warn)"' : ''}>${tab === 'ISSUE' ? 'สโตร์มี' : 'ทีมมี'} ${have(l.itemId)}</div></div>
+        <div class="small ${l.qty > have(l.itemId) ? '' : 'mut'}" ${l.qty > have(l.itemId) ? 'style="color:var(--warn)"' : ''}>${tab === 'BORROW' ? esc(sName(other)) + ' มี' : 'ทีมเรามี'} ${have(l.itemId)}</div></div>
         <button class="qbtn" data-m="${i}">−</button><span class="qv">${l.qty}</span><button class="qbtn" data-p="${i}">+</button>
         <button class="qbtn" data-x="${i}" aria-label="ลบ">×</button></div>`).join('') || '<div class="mut">ยังไม่มีรายการ — กด "+ เพิ่มสินค้า" หรือสแกนบาร์โค้ด</div>'}</div>
     <input class="inp" id="lnote" placeholder="หมายเหตุ (ไม่บังคับ)" maxlength="200" value="${esc(S.loanNote || '')}" style="margin-top:8px">
-    <button class="btn ${tab === 'ISSUE' ? 'ok' : 'pri'} block" id="lgo" style="margin-top:10px" ${tot ? '' : 'disabled'}>ยืนยัน${tab === 'ISSUE' ? 'ยืม' : 'คืน'} ${tot} ชิ้น</button>`;
+    <button class="btn ${tab === 'BORROW' ? 'ok' : 'pri'} block" id="lgo" style="margin-top:10px" ${tot ? '' : 'disabled'}>ยืนยัน${tab === 'BORROW' ? 'ยืม' : 'คืน'} ${tot} ชิ้น</button>`;
   bind();
-  const addItem = (it) => keypad(`${it.name}`, `จำนวนที่${tab === 'ISSUE' ? 'ยืม' : 'คืน'} · ${tab === 'ISSUE' ? 'สโตร์มี' : 'ทีมมี'} ${have(it.id)}`, [], (n) => {
+  const addItem = (it) => keypad(`${it.name}`, `จำนวนที่${tab === 'BORROW' ? 'ยืม' : 'คืน'} · ${tab === 'BORROW' ? sName(other) + ' มี' : 'ทีมเรามี'} ${have(it.id)}`, [], (n) => {
     n = Math.round(n);
     if (!(n > 0)) return toast('กรอกจำนวน', true);
     const ex = lines.find((l) => l.itemId === it.id);
@@ -1889,6 +1920,12 @@ function renderLoan(v) {
     closeSheet(); render();
   });
   $('#ladd', v).onclick = () => pickStockItem(src, tab, addItem);
+  const la = $('#lall', v);
+  if (la) la.onclick = () => {
+    const items = S.sctx.items || [];
+    oweList.forEach((k) => { const it = items.find((x) => x.name === k); if (!it) return; const ex = lines.find((l) => l.itemId === it.id); if (ex) ex.qty = owe[k]; else lines.push({ itemId: it.id, qty: owe[k] }); });
+    render();
+  };
   $('#lscan', v).onclick = () => openScanner((code) => {
     const c = String(code).trim();
     const it = (S.sctx.items || []).find((x) => x.barcode === c || x.id === c);
@@ -1900,7 +1937,7 @@ function renderLoan(v) {
   $('#lnote', v).oninput = (e) => { S.loanNote = e.target.value; };
   $('#lgo', v).onclick = () => {
     if (!navigator.onLine) return toast('ต้องต่ออินเทอร์เน็ตเพื่อยืม-คืน', true);
-    const el = sheet(`${head(tab === 'ISSUE' ? 'ยืนยันยืมสินค้า' : 'ยืนยันคืนสินค้า')}
+    const el = sheet(`${head(tab === 'BORROW' ? 'ยืนยันยืมสินค้า' : 'ยืนยันคืนสินค้า')}
       <div class="mut">${esc(sName(from))} → ${esc(sName(to))}</div>
       <div class="card" style="margin:10px 0">${lines.map((l) => `<div class="row"><span class="sp">${esc(sItem(l.itemId).name)}</span><b class="num">${l.qty}</b></div>`).join('')}</div>
       <button class="btn ok block" id="lok">ยืนยัน ${tot} ชิ้น</button>`);
@@ -1910,7 +1947,7 @@ function renderLoan(v) {
         const r = await api('stockMove', { type: tab, from, to, lines, note: S.loanNote || '' });
         closeSheet();
         toast(r.message || 'บันทึกแล้ว');
-        S.loanLines = []; S.loanNote = ''; delete S.stock[from]; delete S.stock[to]; S.loanHist = null;
+        S.loanLines = []; S.loanNote = ''; S.loanKey = ''; delete S.stock[from]; delete S.stock[to]; S.loanHist = null;
         render();
       } catch (x) { e.target.disabled = false; e.target.textContent = 'ยืนยัน ' + tot + ' ชิ้น'; toast(x.message, true); }
     };
@@ -1927,7 +1964,7 @@ function pickStockItem(src, tab, cb) {
       .sort((a, b) => (Number(src.qty[b.id] || 0) > 0) - (Number(src.qty[a.id] || 0) > 0) || a.name.localeCompare(b.name, 'th')).slice(0, 80);
     $('#pl', el).innerHTML = list.map((i) => `<button class="li" data-pi="${esc(i.id)}" style="width:100%;text-align:left">
       <span class="sp">${esc(i.name)}<br><span class="mut small">${esc(i.id)}</span></span>
-      <span class="num ${Number(src.qty[i.id] || 0) > 0 ? '' : 'mut'}">${tab === 'ISSUE' ? 'สโตร์' : 'ทีม'} ${Number(src.qty[i.id] || 0)}</span></button>`).join('') || '<div class="mut">ไม่พบสินค้า</div>';
+      <span class="num ${Number(src.qty[i.id] || 0) > 0 ? '' : 'mut'}">${tab === 'BORROW' ? 'ทีมนั้นมี' : 'ทีมเรามี'} ${Number(src.qty[i.id] || 0)}</span></button>`).join('') || '<div class="mut">ไม่พบสินค้า</div>';
     $$('[data-pi]', el).forEach((b) => { b.onclick = () => cb(all.find((x) => x.id === b.dataset.pi)); });
   };
   $('#pq', el).oninput = draw;
