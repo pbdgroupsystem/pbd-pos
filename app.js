@@ -381,6 +381,7 @@ function logout() {
   const n = pendingBills().length;
   if (n && !confirm(`มี ${n} บิลที่ยังไม่ได้ส่ง บิลจะยังอยู่ในเครื่องและส่งเมื่อมีคนเข้าสู่ระบบครั้งถัดไป\nออกจากระบบ?`)) return;
   S.session = null; store.del('session');
+  S.sctx = null; S.stock = {}; S.loanLines = []; S.loanHist = null;
   // ล้างข้อมูลลูกค้าที่แคชไว้ ให้คนถัดไปที่ล็อกอินเห็นเฉพาะของสาขาตัวเอง
   if (S.data) { S.data.outstanding = []; S.data.outAt = 0; store.set('data', S.data); }
   S.cart = S.cart.filter((l) => !isCollect(l)); saveCart();
@@ -847,9 +848,15 @@ function bindBanners(root) {
 
 function render() {
   if (!S.session) return showLogin();
-  $$('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.v === S.view));
+  if ((S.view === 'loan' || S.view === 'stock') && !canStock()) S.view = 'sell';
+  $$('#nav button').forEach((b) => {
+    b.classList.toggle('on', b.dataset.v === S.view);
+    if (b.dataset.v === 'loan' || b.dataset.v === 'stock') b.classList.toggle('hidden', !canStock());
+  });
   const v = $('#view');
-  ({ sell: renderSell, bills: renderBills, shift: renderShift, report: renderReport, settings: renderSettings })[S.view](v);
+  ({ sell: renderSell, bills: renderBills, shift: renderShift, report: renderReport, settings: renderSettings,
+    loan: renderLoan, stock: renderStock })[S.view](v);
+  renderSide();
   bindBanners(v);
   renderBadge();
   renderCartBar();
@@ -858,9 +865,7 @@ function render() {
 /* ----- sell ----- */
 function renderSell(v) {
   const cats = Array.from(new Set(items().map((i) => i.cat || i.type).filter(Boolean)));
-  const noShift = S.loc && !openShift();
   v.innerHTML = `${banners()}
-    ${noShift ? `<div class="banner"><span class="sp">ยังไม่เปิดกะของทีมนี้ (ไม่บังคับ แต่ช่วยนับเงินสด)</span><button class="btn" id="goShift">เปิดกะ</button></div>` : ''}
     ${!items().length ? `<div class="card mut">ยังไม่มีรายการสินค้า — ต่อเน็ตแล้วไปที่ ตั้งค่า › โหลดสินค้า/ราคาใหม่</div>` : ''}
     <div class="searchrow">
       <input class="search" id="q" placeholder="ค้นหา / ยิงบาร์โค้ด" value="${esc(S.q)}" autocomplete="off" enterkeyhint="search">
@@ -884,8 +889,6 @@ function renderSell(v) {
   $('#scanBtn', v).onclick = () => openScanner();
   $('#colBtn', v).onclick = openCollect;
   $$('.chip', v).forEach((c) => { c.onclick = () => { S.cat = c.dataset.cat; render(); }; });
-  const gs = $('#goShift', v);
-  if (gs) gs.onclick = () => go('shift');
   renderGrid();
 }
 
@@ -1176,13 +1179,18 @@ async function showReceipt(bill, fresh) {
     ${bill.err ? `<div class="banner" style="margin-top:8px">${esc(bill.err)}</div>` : ''}
     <div class="receipt-prev" id="rp"></div>
     <div class="row" style="flex-wrap:wrap">
-      <button class="btn pri sp" id="pr">พิมพ์</button>
-      <button class="btn sp" id="sh">แชร์รูป</button>
+      ${fresh || ymd(bill.createdAt) === ymd(Date.now()) ? `<button class="btn pri sp" id="pr">${fresh ? 'พิมพ์' : 'พิมพ์ซ้ำ'}</button>
+      <button class="btn sp" id="sh">แชร์รูป</button>` : '<div class="mut small sp">พิมพ์ซ้ำได้เฉพาะวันที่ขาย</div>'}
       ${!fresh && user().manager && !bill.void ? `<button class="btn sp" id="vd">ยกเลิกบิล</button>` : ''}
     </div>
     ${fresh ? `<button class="btn ok block" style="margin-top:8px" data-close>ขายบิลถัดไป</button>` : ''}`);
-  $('#pr', el).onclick = () => printBill(bill);
-  $('#sh', el).onclick = async () => shareCanvas(await receiptCanvas(bill), `receipt-${bill.id}.png`);
+  const copy = fresh ? bill : Object.assign({}, bill, { copy: true });
+  const pr = $('#pr', el), shb = $('#sh', el);
+  if (pr) pr.onclick = () => {
+    if (!fresh && ymd(bill.createdAt) !== ymd(Date.now())) return toast('พิมพ์ซ้ำได้เฉพาะวันที่ขาย', true);
+    printBill(copy);
+  };
+  if (shb) shb.onclick = async () => shareCanvas(await receiptCanvas(copy), `receipt-${bill.id}.png`);
   const vd = $('#vd', el);
   if (vd) vd.onclick = () => voidBill(bill.id);
   const cv = await receiptCanvas(bill);
@@ -1626,7 +1634,227 @@ function openTeamPicker() {
   $$('[data-l]', el).forEach((b) => { b.onclick = () => { S.loc = b.dataset.l; store.set('loc', S.loc); closeSheet(); render(); }; });
 }
 
-function go(view) { S.view = view; window.scrollTo(0, 0); render(); }
+function go(view) { closeSide(); S.view = view; window.scrollTo(0, 0); render(); }
+
+/* ---------- เมนูด้านข้าง (แฮมเบอร์เกอร์) ---------- */
+const STOCK_ROLES = ['Admin', 'BranchAdmin', 'BranchManager', 'TeamLead'];
+const canStock = () => STOCK_ROLES.indexOf(user().role) >= 0;
+const ICON = {
+  bills: '<path d="M5 2h14v20l-3-2-2 2-2-2-2 2-2-2-3 2z"/><path d="M9 7h6M9 11h6M9 15h4"/>',
+  shift: '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01M18 12h.01"/>',
+  report: '<path d="M3 3v18h18"/><path d="M7 15v3M12 10v8M17 6v12"/>',
+  settings: '<path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>',
+  open: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  loan: '<path d="M7 7h11l-3-3M17 17H6l3 3"/>',
+  stock: '<path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8M12 13v8"/>',
+  sell: '<circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/><path d="M2 3h3l2.6 12.2a2 2 0 0 0 2 1.6h8.2a2 2 0 0 0 2-1.5L22 7H6.2"/>'
+};
+const svg = (k) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICON[k]}</svg>`;
+function renderSide() {
+  const side = $('#side');
+  if (!side || !S.session) return;
+  drawMe();
+  const sh = S.loc ? openShift() : null;
+  const it = (v, label, extra) => `<button class="si ${S.view === v ? 'on' : ''}" data-sv="${v}">${svg(v)}<span>${label}</span>${extra || ''}</button>`;
+  side.innerHTML = `<div class="sme">${$('#me') ? $('#me').innerHTML : ''}</div>
+    ${it('sell', 'ขาย')}
+    <button class="si" data-sv="shift" data-open="1">${svg('open')}<span>${sh ? 'ปิดกะ' : 'เปิดกะ'}</span>
+      <span class="r mut small">${sh ? 'เปิดอยู่ ' + hm(sh.openAt) : S.loc ? 'ยังไม่เปิด' : ''}</span></button>
+    ${it('bills', 'บิล', pendingBills().length ? `<span class="r pend">${pendingBills().length}</span>` : '')}
+    ${it('shift', 'กะ/เงินสด')}
+    ${it('report', 'รายงาน')}
+    ${canStock() ? `<div class="sect">สต็อกทีม</div>${it('loan', 'ยืม - คืน สินค้า')}${it('stock', 'สินค้าคงเหลือ')}` : ''}
+    <div class="sect">ระบบ</div>
+    ${it('settings', 'ตั้งค่า')}
+    <div class="ver">PBD POS ${esc(CFG.APP_VERSION || '')}</div>`;
+  $$('[data-sv]', side).forEach((b) => { b.onclick = () => go(b.dataset.sv); });
+}
+function openSide() { renderSide(); $('#side').classList.add('open'); $('#sideOv').classList.remove('hidden'); }
+function closeSide() { const s = $('#side'); if (s) s.classList.remove('open'); const o = $('#sideOv'); if (o) o.classList.add('hidden'); }
+
+/* ---------- สต็อกทีม: สินค้าคงเหลือ / ยืม - คืน (ใช้ข้อมูลจาก PBDSTOCK ต้องต่อเน็ต) ---------- */
+S.stock = {};
+async function loadCtx(force) {
+  if (!force && S.sctx && Date.now() - S.sctx.at < 10 * 60000) return S.sctx;
+  if (!navigator.onLine) { if (S.sctx) return S.sctx; throw new Error('ต้องต่ออินเทอร์เน็ตเพื่อดูสต็อก'); }
+  const j = await api('stockCtx', {});
+  S.sctx = Object.assign(j, { at: Date.now() });
+  return S.sctx;
+}
+async function loadStock(loc, force) {
+  const c = S.stock[loc];
+  if (!force && c && Date.now() - c.at < 2 * 60000) return c;
+  if (!navigator.onLine) { if (c) return c; throw new Error('ต้องต่ออินเทอร์เน็ตเพื่อดูสต็อก'); }
+  const j = await api('stockGet', { loc });
+  S.stock[loc] = { qty: j.qty || {}, at: Date.now() };
+  return S.stock[loc];
+}
+const sName = (id) => {
+  const c = S.sctx || {};
+  const l = (c.teams || []).concat(c.branches || []).find((x) => x.id === id);
+  return l ? l.name : locName(id);
+};
+const sItem = (id) => ((S.sctx && S.sctx.items) || []).find((i) => i.id === id) || { id, name: id };
+/** คลังที่ดูได้: หัวหน้าทีม = ทีมตัวเอง + สโตร์สาขา · ผู้จัดการ = สโตร์สาขา + ทุกทีมในสาขา */
+function stockLocs() {
+  const c = S.sctx;
+  if (!c) return [];
+  if (c.isTeamLead) return [c.myTeam, c.myBranch].filter(Boolean);
+  const out = [];
+  (c.branches || []).forEach((b) => {
+    if (!c.teams.some((t) => t.parent === b.id) && b.id !== c.myBranch) return;
+    out.push(b.id);
+    c.teams.filter((t) => t.parent === b.id).forEach((t) => out.push(t.id));
+  });
+  return out;
+}
+const loanTeams = () => {
+  const c = S.sctx;
+  if (!c) return [];
+  return c.isTeamLead ? (c.myTeam ? [c.myTeam] : []) : c.teams.map((t) => t.id);
+};
+const teamBranch = (team) => { const t = ((S.sctx && S.sctx.teams) || []).find((x) => x.id === team); return t ? t.parent : (S.sctx && S.sctx.myBranch); };
+function stockWait(v, fn) {
+  v.innerHTML = `${banners()}<div class="card mut">กำลังโหลดข้อมูลสต็อกจาก PBDSTOCK…</div>`;
+  fn().then(() => { if (S.view === 'stock' || S.view === 'loan') render(); })
+    .catch((e) => { v.innerHTML = `${banners()}<div class="banner">${esc(e.message)}</div><button class="btn block" id="sRetry">ลองใหม่</button>`; $('#sRetry', v).onclick = () => render(); });
+}
+
+function renderStock(v) {
+  if (!S.sctx) return stockWait(v, () => loadCtx());
+  const locsOk = stockLocs();
+  if (!locsOk.length) { v.innerHTML = '<div class="card mut">บัญชีนี้ยังไม่มีคลังที่ดูได้</div>'; return; }
+  if (locsOk.indexOf(S.stockLoc) < 0) S.stockLoc = locsOk.indexOf(S.loc) >= 0 ? S.loc : locsOk[0];
+  const st = S.stock[S.stockLoc];
+  if (!st) return stockWait(v, () => loadStock(S.stockLoc));
+  const q = (S.stockQ || '').toLowerCase();
+  const rows = Object.keys(st.qty).filter((id) => Number(st.qty[id]) !== 0).map((id) => ({ it: sItem(id), n: Number(st.qty[id]) }))
+    .filter((r) => !q || (r.it.name + ' ' + r.it.id).toLowerCase().includes(q))
+    .sort((a, b) => a.it.name.localeCompare(b.it.name, 'th'));
+  const total = rows.reduce((a, r) => a + r.n, 0);
+  v.innerHTML = `${banners()}
+    <div class="row" style="gap:8px;margin-bottom:8px">
+      <select class="inp" id="sl" style="flex:1">${locsOk.map((id) => `<option value="${esc(id)}" ${id === S.stockLoc ? 'selected' : ''}>${esc(sName(id))}${id === teamBranch(id) || (S.sctx.branches || []).some((b) => b.id === id) ? ' (สโตร์สาขา)' : ''}</option>`).join('')}</select>
+      <button class="btn" id="sr" style="flex:none">รีเฟรช</button></div>
+    <input class="search" id="sq" placeholder="ค้นหาสินค้า" value="${esc(S.stockQ || '')}" autocomplete="off" style="margin-bottom:8px">
+    <div class="kpis"><div class="kpi"><div class="mut small">รวมคงเหลือ</div><div class="v num">${total} ชิ้น</div></div>
+      <div class="kpi"><div class="mut small">อัปเดต</div><div class="v num" style="font-size:18px">${hm(st.at)}</div></div></div>
+    <div class="card">${rows.map((r) => `<div class="stk"><div class="sp"><div>${esc(r.it.name)}</div><div class="mut small">${esc(r.it.id)}${r.it.cat ? ' · ' + esc(r.it.cat) : ''}</div></div>
+      <div class="q num ${r.n < 0 ? 'neg' : ''}">${r.n}</div></div>`).join('') || '<div class="mut">ไม่มีสินค้าคงเหลือ</div>'}</div>
+    <div class="mut small" style="margin-top:6px">จำนวนจากสมุดเคลื่อนไหวของ PBDSTOCK · ยอดติดลบ = ขายใน Loyverse มากกว่าที่เบิก</div>`;
+  $('#sl', v).onchange = (e) => { S.stockLoc = e.target.value; render(); };
+  $('#sr', v).onclick = () => { delete S.stock[S.stockLoc]; render(); };
+  const sq = $('#sq', v);
+  sq.oninput = () => { S.stockQ = sq.value; const pos = sq.selectionStart; render(); const n = $('#sq'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } };
+}
+
+function renderLoan(v) {
+  if (!S.sctx) return stockWait(v, () => loadCtx());
+  const teams = loanTeams();
+  if (!teams.length) { v.innerHTML = '<div class="card mut">บัญชีนี้ยังไม่ได้อยู่ในทีม — ให้ Admin ตั้งทีมในหน้าจัดการผู้ใช้</div>'; return; }
+  const tab = S.loanTab || 'ISSUE';
+  if (teams.indexOf(S.loanTeam) < 0) S.loanTeam = teams.indexOf(S.loc) >= 0 ? S.loc : teams[0];
+  const team = S.loanTeam, br = teamBranch(team);
+  const tabs = `<div class="chips" style="margin-bottom:8px">${[['ISSUE', 'ยืม (เบิกเข้าทีม)'], ['RETURN', 'คืน (คืนสโตร์)'], ['HIST', 'ประวัติ']].map(([k, t]) =>
+    `<button class="chip ${tab === k ? 'on' : ''}" data-lt="${k}">${t}</button>`).join('')}</div>
+    <select class="inp" id="lteam" style="margin-bottom:8px" ${teams.length < 2 ? 'disabled' : ''}>${teams.map((id) => `<option value="${esc(id)}" ${id === team ? 'selected' : ''}>${esc(sName(id))}</option>`).join('')}</select>`;
+  const bind = () => {
+    $$('[data-lt]', v).forEach((b) => { b.onclick = () => { S.loanTab = b.dataset.lt; render(); }; });
+    $('#lteam', v).onchange = (e) => { S.loanTeam = e.target.value; S.loanLines = []; render(); };
+  };
+  if (tab === 'HIST') {
+    const h = S.loanHist && S.loanHist.team === team ? S.loanHist : null;
+    if (!h) {
+      v.innerHTML = `${banners()}${tabs}<div class="card mut">กำลังโหลดประวัติ…</div>`;
+      bind();
+      api('stockDocs', { loc: team, days: 30 }).then((j) => { S.loanHist = { team, docs: j.docs || [] }; if (S.view === 'loan') render(); })
+        .catch((e) => toast(e.message, true));
+      return;
+    }
+    v.innerHTML = `${banners()}${tabs}
+      <div class="row" style="margin-bottom:6px"><span class="mut small sp">30 วันล่าสุด · ${h.docs.length} รายการ</span><button class="btn" id="hr" style="flex:none">รีเฟรช</button></div>
+      <div class="card list">${h.docs.map((d) => `<div class="li" style="display:block">
+        <div class="row"><span class="tag ${d.type === 'ISSUE' ? 'ok' : 'wait'}">${d.type === 'ISSUE' ? 'ยืม' : 'คืน'}</span>
+          <span class="sp num">${esc(d.date)}</span><b class="num">${d.total} ชิ้น</b></div>
+        <div class="mut small">${esc(d.id)} · ${esc(sName(d.from))} → ${esc(sName(d.to))} · ${esc(d.by)}</div>
+        <div class="small">${d.lines.map((l) => esc(l.name) + ' ×' + l.qty).join(', ')}</div>
+        ${d.note ? `<div class="mut small">${esc(d.note)}</div>` : ''}</div>`).join('') || '<div class="mut">ยังไม่มีรายการยืม-คืน</div>'}</div>`;
+    bind();
+    $('#hr', v).onclick = () => { S.loanHist = null; render(); };
+    return;
+  }
+  const from = tab === 'ISSUE' ? br : team, to = tab === 'ISSUE' ? team : br;
+  const src = S.stock[from];
+  if (!src) { v.innerHTML = `${banners()}${tabs}<div class="card mut">กำลังโหลดสต็อก ${esc(sName(from))}…</div>`; bind();
+    loadStock(from).then(() => { if (S.view === 'loan') render(); }).catch((e) => toast(e.message, true)); return; }
+  if (S.loanKey !== tab + team) { S.loanKey = tab + team; S.loanLines = []; S.loanNote = ''; }
+  const lines = S.loanLines || (S.loanLines = []);
+  const have = (id) => Number(src.qty[id] || 0);
+  const tot = lines.reduce((a, l) => a + l.qty, 0);
+  v.innerHTML = `${banners()}${tabs}
+    <div class="card" style="margin-bottom:8px"><div class="row"><span class="sp">${esc(sName(from))}</span><span class="mut">→</span><span class="sp" style="text-align:right">${esc(sName(to))}</span></div>
+      <div class="mut small">${tab === 'ISSUE' ? 'เบิกของจากสโตร์สาขาเข้าทีม' : 'คืนของจากทีมเข้าสโตร์สาขา'} · ตัดสต็อกทันทีเมื่อยืนยัน</div></div>
+    <div class="row" style="gap:8px;margin-bottom:6px"><button class="btn pri" id="ladd" style="flex:1">+ เพิ่มสินค้า</button>
+      <button class="iconbtn" id="lscan" aria-label="สแกน"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8v8M10 8v8M14 8v8M17 8v8"/></svg></button></div>
+    <div class="card">${lines.map((l, i) => `<div class="ln"><div class="sp"><div>${esc(sItem(l.itemId).name)}</div>
+        <div class="small ${tab === 'ISSUE' && l.qty > have(l.itemId) ? '' : 'mut'}" ${tab === 'ISSUE' && l.qty > have(l.itemId) ? 'style="color:var(--warn)"' : ''}>${tab === 'ISSUE' ? 'สโตร์มี' : 'ทีมมี'} ${have(l.itemId)}</div></div>
+        <button class="qbtn" data-m="${i}">−</button><span class="qv">${l.qty}</span><button class="qbtn" data-p="${i}">+</button>
+        <button class="qbtn" data-x="${i}" aria-label="ลบ">×</button></div>`).join('') || '<div class="mut">ยังไม่มีรายการ — กด "+ เพิ่มสินค้า" หรือสแกนบาร์โค้ด</div>'}</div>
+    <input class="inp" id="lnote" placeholder="หมายเหตุ (ไม่บังคับ)" maxlength="200" value="${esc(S.loanNote || '')}" style="margin-top:8px">
+    <button class="btn ${tab === 'ISSUE' ? 'ok' : 'pri'} block" id="lgo" style="margin-top:10px" ${tot ? '' : 'disabled'}>ยืนยัน${tab === 'ISSUE' ? 'ยืม' : 'คืน'} ${tot} ชิ้น</button>`;
+  bind();
+  const addItem = (it) => keypad(`${it.name}`, `จำนวนที่${tab === 'ISSUE' ? 'ยืม' : 'คืน'} · ${tab === 'ISSUE' ? 'สโตร์มี' : 'ทีมมี'} ${have(it.id)}`, [], (n) => {
+    n = Math.round(n);
+    if (!(n > 0)) return toast('กรอกจำนวน', true);
+    const ex = lines.find((l) => l.itemId === it.id);
+    if (ex) ex.qty += n; else lines.push({ itemId: it.id, qty: n });
+    closeSheet(); render();
+  });
+  $('#ladd', v).onclick = () => pickStockItem(src, tab, addItem);
+  $('#lscan', v).onclick = () => openScanner((code) => {
+    const c = String(code).trim();
+    const it = (S.sctx.items || []).find((x) => x.barcode === c || x.id === c);
+    if (it) addItem(it); else toast('ไม่พบสินค้า: ' + c, true);
+  });
+  $$('[data-m]', v).forEach((b) => { b.onclick = () => { const l = lines[+b.dataset.m]; if (l.qty > 1) l.qty--; render(); }; });
+  $$('[data-p]', v).forEach((b) => { b.onclick = () => { lines[+b.dataset.p].qty++; render(); }; });
+  $$('[data-x]', v).forEach((b) => { b.onclick = () => { lines.splice(+b.dataset.x, 1); render(); }; });
+  $('#lnote', v).oninput = (e) => { S.loanNote = e.target.value; };
+  $('#lgo', v).onclick = () => {
+    if (!navigator.onLine) return toast('ต้องต่ออินเทอร์เน็ตเพื่อยืม-คืน', true);
+    const el = sheet(`${head(tab === 'ISSUE' ? 'ยืนยันยืมสินค้า' : 'ยืนยันคืนสินค้า')}
+      <div class="mut">${esc(sName(from))} → ${esc(sName(to))}</div>
+      <div class="card" style="margin:10px 0">${lines.map((l) => `<div class="row"><span class="sp">${esc(sItem(l.itemId).name)}</span><b class="num">${l.qty}</b></div>`).join('')}</div>
+      <button class="btn ok block" id="lok">ยืนยัน ${tot} ชิ้น</button>`);
+    $('#lok', el).onclick = async (e) => {
+      e.target.disabled = true; e.target.textContent = 'กำลังบันทึก…';
+      try {
+        const r = await api('stockMove', { type: tab, from, to, lines, note: S.loanNote || '' });
+        closeSheet();
+        toast(r.message || 'บันทึกแล้ว');
+        S.loanLines = []; S.loanNote = ''; delete S.stock[from]; delete S.stock[to]; S.loanHist = null;
+        render();
+      } catch (x) { e.target.disabled = false; e.target.textContent = 'ยืนยัน ' + tot + ' ชิ้น'; toast(x.message, true); }
+    };
+  };
+}
+function pickStockItem(src, tab, cb) {
+  const all = (S.sctx.items || []);
+  const el = sheet(`${head('เลือกสินค้า')}
+    <input class="search" id="pq" placeholder="ค้นหาชื่อ / รหัส" autocomplete="off" style="margin-bottom:8px">
+    <div class="list" id="pl"></div>`);
+  const draw = () => {
+    const q = $('#pq', el).value.trim().toLowerCase();
+    const list = all.filter((i) => !q || (i.name + ' ' + i.id).toLowerCase().includes(q))
+      .sort((a, b) => (Number(src.qty[b.id] || 0) > 0) - (Number(src.qty[a.id] || 0) > 0) || a.name.localeCompare(b.name, 'th')).slice(0, 80);
+    $('#pl', el).innerHTML = list.map((i) => `<button class="li" data-pi="${esc(i.id)}" style="width:100%;text-align:left">
+      <span class="sp">${esc(i.name)}<br><span class="mut small">${esc(i.id)}</span></span>
+      <span class="num ${Number(src.qty[i.id] || 0) > 0 ? '' : 'mut'}">${tab === 'ISSUE' ? 'สโตร์' : 'ทีม'} ${Number(src.qty[i.id] || 0)}</span></button>`).join('') || '<div class="mut">ไม่พบสินค้า</div>';
+    $$('[data-pi]', el).forEach((b) => { b.onclick = () => cb(all.find((x) => x.id === b.dataset.pi)); });
+  };
+  $('#pq', el).oninput = draw;
+  draw();
+}
 
 /* ---------- scanner ---------- */
 const SCAN = { on: false, stream: null, h5: null, done: false };
@@ -1924,6 +2152,7 @@ function receiptOps(b, stIn) {
   ops.push({ t: 'text', s: st.shopName || 'PBD GROUP', align: 'center', bold: true, scale: 1.3 });
   ops.push(...multiline(st.address, { scale: 0.85 }));
   if (st.phone) ops.push({ t: 'text', s: 'โทร ' + st.phone, align: 'center', scale: 0.85 });
+  if (b.copy) ops.push({ t: 'text', s: '*** สำเนา (พิมพ์ซ้ำ ' + dt(Date.now()) + ') ***', align: 'center', bold: true, scale: 0.85 });
   ops.push(
     { t: 'hr' },
     { t: 'row', l: 'เลขที่', r: b.id, scale: 0.85 },
@@ -2174,6 +2403,8 @@ function boot() {
   $('#loginBtn').onclick = startLogin;
   $('#qrBtn').onclick = startQrLogin;
   $('#me').onclick = () => go('settings');
+  $('#hamBtn').onclick = openSide;
+  $('#sideOv').onclick = closeSide;
   $('#qrNew').onclick = startQrLogin;
   $('#teamBtn').onclick = openTeamPicker;
   $('#cartbar').onclick = openCart;

@@ -47,13 +47,34 @@ header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:8px;
   backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
 .brand{font-family:Kanit;font-weight:600;font-size:18px;letter-spacing:.3px}
 .brand b{color:var(--red)}
+.ham{width:40px;height:40px;display:grid;place-items:center;border-radius:12px;color:var(--tx);flex:none;margin-left:-4px}
+.ham svg{width:24px;height:24px}
+.side{position:fixed;top:0;bottom:0;left:0;width:min(300px,84vw);background:var(--card);z-index:41;transform:translateX(-104%);
+  transition:transform .22s ease;overflow-y:auto;padding:calc(env(safe-area-inset-top,0px) + 14px) 10px calc(var(--safe-b) + 20px);
+  border-right:1px solid var(--line);box-shadow:20px 0 40px -20px rgba(0,0,0,.6)}
+.side.open{transform:none}
+.side-ov{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:40}
+.side .sme{display:flex;align-items:center;gap:10px;padding:6px 8px 14px;border-bottom:1px solid var(--line);margin-bottom:8px}
+.side .si{display:flex;align-items:center;gap:12px;width:100%;padding:12px;border-radius:12px;font-size:16px;text-align:left;color:var(--tx);background:none;border:0;font-family:inherit}
+.side .si.on{background:var(--card2);color:var(--red)}
+.side .si svg{width:22px;height:22px;flex:none}
+.side .si .r{margin-left:auto}
+.side .sect{font-size:12px;color:var(--mut);margin:14px 12px 4px}
+.side .ver{font-size:12px;color:var(--mut);margin:18px 12px 0}
+.stk{display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid var(--line)}
+.stk .q{font-family:Kanit;font-size:20px;font-weight:600;min-width:52px;text-align:right}
+.stk .q.neg{color:var(--warn)}
+.ln{display:flex;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid var(--line)}
+.ln .qbtn{width:38px;height:38px;border-radius:10px;background:var(--card2);border:1px solid var(--line);color:var(--tx);font-size:18px}
+.ln .qv{min-width:36px;text-align:center;font-family:Kanit;font-size:18px}
 .me{display:flex;align-items:center;gap:9px;min-width:0;background:none;border:0;padding:0;color:inherit;text-align:left;font:inherit}
-.me .av{width:38px;height:38px;border-radius:50%;object-fit:cover;flex:none;background:var(--card2);border:2px solid var(--red);
+:is(.me,.sme) .av{width:38px;height:38px;border-radius:50%;object-fit:cover;flex:none;background:var(--card2);border:2px solid var(--red);
   display:grid;place-items:center;font-family:Kanit;font-weight:600;font-size:16px}
-.me .who{display:flex;flex-direction:column;min-width:0;line-height:1.2}
-.me .nm{font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:44vw}
-.me .sub{font-size:11px;color:var(--mut);white-space:nowrap;font-family:Kanit}
-.me .sub b{color:var(--red);font-weight:600}
+:is(.me,.sme) .who{display:flex;flex-direction:column;min-width:0;line-height:1.2}
+:is(.me,.sme) .nm{font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:44vw}
+.sme .nm{max-width:200px}
+:is(.me,.sme) .sub{font-size:11px;color:var(--mut);white-space:nowrap;font-family:Kanit}
+:is(.me,.sme) .sub b{color:var(--red);font-weight:600}
 .teambtn{margin-left:auto;display:flex;align-items:center;gap:6px;background:var(--card2);
   border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-weight:600;max-width:46vw;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -64,9 +85,9 @@ header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:8px;
 main{padding:12px 12px calc(var(--nav) + 90px + var(--safe-b))}
 
 /* bottom nav */
-nav{position:fixed;left:0;right:0;bottom:0;z-index:20;display:grid;grid-template-columns:repeat(5,1fr);
+nav{position:fixed;left:0;right:0;bottom:0;z-index:20;display:flex;
   height:calc(var(--nav) + var(--safe-b));padding-bottom:var(--safe-b);background:#0C0A0B;border-top:1px solid var(--line)}
-nav button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:var(--mut);font-size:12px}
+nav button{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:var(--mut);font-size:12px}
 nav button svg{width:22px;height:22px}
 nav button.on{color:var(--tx)}
 nav button.on svg{color:var(--red)}
@@ -198,20 +219,21 @@ textarea.inp{resize:vertical;min-height:70px}
 
 <div id="app" class="hidden">
   <header>
+    <button class="ham" id="hamBtn" aria-label="เมนู"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
     <button class="me" id="me" aria-label="บัญชีของฉัน"></button>
     <span id="pend" class="pend hidden"></span>
     <button class="teambtn" id="teamBtn"><span class="dot" id="netDot"></span><span id="teamName">-</span></button>
   </header>
+  <div id="sideOv" class="side-ov hidden"></div>
+  <aside id="side" class="side" aria-label="เมนู"></aside>
   <main id="view"></main>
   <div id="cartbar" class="cartbar hidden" role="button">
     <span class="n" id="cartN">0</span><span>ตะกร้า</span><span class="t num" id="cartT">฿0</span>
   </div>
   <nav id="nav">
     <button data-v="sell" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/><path d="M2 3h3l2.6 12.2a2 2 0 0 0 2 1.6h8.2a2 2 0 0 0 2-1.5L22 7H6.2"/></svg>ขาย</button>
-    <button data-v="bills"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 2h14v20l-3-2-2 2-2-2-2 2-2-2-3 2z"/><path d="M9 7h6M9 11h6M9 15h4"/></svg>บิล</button>
-    <button data-v="shift"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01M18 12h.01"/></svg>กะ/เงินสด</button>
-    <button data-v="report"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15v3M12 10v8M17 6v12"/></svg>รายงาน</button>
-    <button data-v="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>ตั้งค่า</button>
+    <button data-v="loan" class="hidden"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h11l-3-3M17 17H6l3 3"/></svg>ยืม - คืน</button>
+    <button data-v="stock" class="hidden"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8M12 13v8"/></svg>คงเหลือ</button>
   </nav>
 </div>
 
