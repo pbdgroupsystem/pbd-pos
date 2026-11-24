@@ -1405,6 +1405,9 @@ function renderSettings(v) {
       <div id="rawBox" class="${p.mode === 'rawbt' ? '' : 'hidden'}" style="margin-top:10px">
         <button class="btn block" id="rawOpen">เปิด RawBT เพื่อเลือกเครื่องพิมพ์</button>
         <div class="mut small" style="margin-top:6px">เลือกเครื่องพิมพ์ในแอป RawBT (รายการ Bluetooth ที่จับคู่ไว้ในเครื่อง) · SUNMI เลือก "InnerPrinter" (เครื่องพิมพ์ในตัว)</div>
+        <label class="row" style="margin-top:10px"><input type="checkbox" id="rws" ${p.ws ? 'checked' : ''}><span>พิมพ์อัตโนมัติไม่ต้องแตะ (ผ่านแอป Server for RawBT)</span></label>
+        <div id="rwsBox" class="${p.ws ? '' : 'hidden'}"><div class="mut small" style="margin-top:4px">ติดตั้งแอป "Server for RawBT" (Play Store) ในเครื่องนี้แล้วเปิดค้างไว้ · งานพิมพ์จากเครื่องอื่นและพิมพ์อัตโนมัติหลังขายจะพิมพ์ทันทีไม่ต้องแตะ</div>
+          <button class="btn block" id="rwsT" style="margin-top:8px">ทดสอบการเชื่อมต่อ</button></div>
       </div>
       <div id="bleBox" class="${p.mode === 'ble' ? '' : 'hidden'}">
         <div class="row"><span class="sp small" id="bleSt"></span><button class="btn" id="bleC">ค้นหาเครื่องพิมพ์</button></div>
@@ -1430,6 +1433,10 @@ function renderSettings(v) {
   $('#bleC', v).onclick = async () => { try { await bleConnect(); toast('เชื่อมต่อเครื่องพิมพ์แล้ว'); } catch (e) { toast(e.message, true); } bleStatus(); bleKnown(v); };
   bleStatus();
   if (p.mode === 'ble') bleKnown(v);
+  const rws = $('#rws', v);
+  if (rws) rws.onchange = (e) => { p.ws = e.target.checked; savePrn(); render(); };
+  const rwsT = $('#rwsT', v);
+  if (rwsT) rwsT.onclick = async () => { rwsT.disabled = true; try { await rawbtWs(new Uint8Array([0x1b, 0x40, 0x0a])); toast('เชื่อมต่อ Server for RawBT ได้แล้ว'); } catch (e) { toast(e.message, true); } rwsT.disabled = false; };
   const rcv = $('#rcv', v);
   if (rcv) rcv.onchange = (e) => { p.recv = e.target.checked; savePrn(); recvLoop(); render(); };
   const rcn = $('#rcn', v);
@@ -2467,7 +2474,19 @@ async function shareCanvas(cv, name) {
 }
 
 let printing = false;
-async function printOps(ops, local) {
+/** RawBT แบบไม่ต้องแตะ: แอป "Server for RawBT" เปิด WebSocket ที่ 127.0.0.1:40213 บนเครื่องเดียวกัน → ส่ง ESC/POS ตรงๆ */
+function rawbtWs(bytes) {
+  return new Promise((ok, no) => {
+    let ws, done = false;
+    const fin = (e) => { if (done) return; done = true; clearTimeout(t); try { ws && ws.close(); } catch (x) {} e ? no(e) : ok(true); };
+    const t = setTimeout(() => fin(new Error('เชื่อม Server for RawBT ไม่ได้ (หมดเวลา)')), 5000);
+    try { ws = new WebSocket('ws://127.0.0.1:40213/'); } catch (e) { return fin(new Error('เชื่อม Server for RawBT ไม่ได้')); }
+    ws.binaryType = 'arraybuffer';
+    ws.onopen = () => { try { ws.send(bytes); setTimeout(() => fin(), 600); } catch (e) { fin(e); } };
+    ws.onerror = () => fin(new Error('เชื่อม Server for RawBT ไม่ได้ — เปิดแอป Server for RawBT ไว้หรือยัง'));
+  });
+}
+async function printOps(ops, local, opts = {}) {
   if (printing) return false;
   if (S.prn.mode === 'relay' && !local) return relaySend(ops);
   printing = true;
@@ -2476,7 +2495,12 @@ async function printOps(ops, local) {
     const mode = local && S.prn.mode === 'relay' ? 'share' : S.prn.mode;
     if (mode === 'none' || mode === 'share') { await shareCanvas(cv, `pbd-${Date.now()}.png`); return true; }
     const bytes = canvasToEscPos(cv);
+    if (mode === 'rawbt' && S.prn.ws) {
+      try { await rawbtWs(bytes); toast('ส่งไปเครื่องพิมพ์แล้ว'); return true; }
+      catch (e) { if (opts.auto) { toast(e.message, true); return false; } }   // พิมพ์อัตโนมัติ: ไม่ fallback (เปิดแอปอื่นเองไม่ได้ถ้าไม่แตะ)
+    }
     if (mode === 'rawbt') {
+      if (opts.auto) return false;
       // ถ้าเครื่องยังไม่มี RawBT จะเปิดหน้า Play Store ให้ติดตั้ง
       const fallback = encodeURIComponent('https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter');
       location.href = 'intent:base64,' + bytesToB64(bytes) +
@@ -2518,7 +2542,7 @@ async function relaySend(ops) {
     toast('ส่งไปพิมพ์ที่ ' + (r.name || p.targetName || 'เครื่องรับ') + ' แล้ว');
   } catch (e) { toast('ส่งไปพิมพ์ไม่ได้: ' + e.message, true); }
 }
-const RECV = { timer: 0, busy: false, skip: {} };
+const RECV = { timer: 0, busy: false, skip: {}, auto: false, retry: 0 };
 const recvName = () => S.prn.recvName || `${deviceModel()} · ${S.loc ? locName(S.loc) : ''}`;
 /* ---------- คิวงานพิมพ์ (เครื่องรับ): รอพิมพ์ / พิมพ์แล้ว — เก็บในเครื่องนี้ ----------
  * งานที่รับมาเข้าคิวเป็น "รอพิมพ์" ก่อนเสมอ · กดพิมพ์สำเร็จ = "พิมพ์แล้ว" (พิมพ์ซ้ำได้)
@@ -2542,11 +2566,12 @@ function pqAdd(job) {
   return true;
 }
 function pqRefresh() { renderBadge(); if (S.view === 'printq') render(); else renderSide(); }
-async function pqPrint(id) {
+const canAutoPrint = () => S.prn.mode === 'ble' || (S.prn.mode === 'rawbt' && !!S.prn.ws);
+async function pqPrint(id, auto) {
   const j = S.pq.find((x) => x.id === id);
   if (!j) return false;
   if (!j.ops || !j.ops.length) { toast('งานนี้ไม่มีข้อมูลสำหรับพิมพ์แล้ว', true); return false; }
-  const ok = await printOps(unpackOps(j.ops), true);
+  const ok = await printOps(unpackOps(j.ops), true, { auto: !!auto });
   if (ok !== false) { j.status = 'done'; j.doneAt = Date.now(); j.n = (j.n || 0) + 1; pqSave(); }
   pqRefresh();
   return ok !== false;
@@ -2570,17 +2595,20 @@ function recvLoop() {
 }
 /** งานพิมพ์ที่รับมา: BLE พิมพ์ได้เอง · RawBT ต้องแตะ "พิมพ์" 1 ครั้ง (Android ไม่ให้เว็บเปิดแอปอื่นเองโดยไม่แตะ) */
 async function showRecvJob() {
-  if ($('#rjob') || S.view === 'printq') return;   // อยู่หน้าคิวงานพิมพ์อยู่แล้ว ไม่ต้องเด้ง
+  if ($('#rjob') || RECV.auto) return;
   const wait = pqWait().filter((j) => !RECV.skip[j.id]);
   const job = wait[0];
   if (!job) return;
   try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch (x) {}
-  if (S.prn.mode === 'ble') {
-    const ok = await pqPrint(job.id);
-    if (!ok) { RECV.skip[job.id] = 1; return; }   // พิมพ์ไม่สำเร็จ → ค้างในคิว "รอพิมพ์"
+  if (canAutoPrint()) {   // พิมพ์อัตโนมัติทันทีที่งานเข้าคิว (BLE / RawBT + Server for RawBT)
+    RECV.auto = true;
+    const ok = await pqPrint(job.id, true);
+    RECV.auto = false;
+    if (!ok) { RECV.skip[job.id] = 1; RECV.retry = setTimeout(() => { RECV.skip = {}; showRecvJob(); }, 30000); return; }   // ไม่สำเร็จ → ค้าง "รอพิมพ์" ลองใหม่ใน 30 วิ
     toast('พิมพ์งานจาก ' + job.from);
     return showRecvJob();
   }
+  if (S.view === 'printq') return;   // ต้องแตะพิมพ์เอง: อยู่หน้าคิวแล้ว ไม่ต้องเด้ง
   const el = sheet(`${head('งานพิมพ์จาก ' + esc(job.from))}
     <div id="rjob" class="mut small">${job.title ? esc(job.title) + ' · ' : ''}${hm(job.at)}${wait.length > 1 ? ` · รออีก ${wait.length - 1} งาน` : ''}</div>
     <div class="receipt-prev" id="rjp"></div>
@@ -2599,7 +2627,8 @@ function renderPrintQ(v) {
   const chip = (k, label, n) => `<button class="chip ${f === k ? 'on' : ''}" data-pf="${k}">${label}${n != null ? ' ' + n : ''}</button>`;
   v.innerHTML = `${banners()}
     <div class="row" style="margin-bottom:8px"><h3 class="sp" style="font-size:17px">คิวงานพิมพ์</h3>
-      <span class="small" style="color:${S.prn.recv ? 'var(--ok)' : 'var(--mut)'}">${S.prn.recv ? '● รับงานอยู่' : 'ปิดรับงาน'}</span></div>
+      <span class="small" style="color:${S.prn.recv ? 'var(--ok)' : 'var(--mut)'}">${S.prn.recv ? '● รับงานอยู่' + (canAutoPrint() ? ' · พิมพ์อัตโนมัติ' : '') : 'ปิดรับงาน'}</span></div>
+    ${S.prn.recv && !canAutoPrint() ? '<div class="banner"><span class="sp">ยังพิมพ์อัตโนมัติไม่ได้ — ต้องแตะพิมพ์ทีละงาน · เปิด "พิมพ์อัตโนมัติไม่ต้องแตะ" ที่ ตั้งค่า › เครื่องพิมพ์ใบเสร็จ</span></div>' : ''}
     <div class="chips">${chip('all', 'ทั้งหมด', all.length)}${chip('wait', 'รอพิมพ์', nw)}${chip('done', 'พิมพ์แล้ว', all.length - nw)}</div>
     ${nw > 1 && S.prn.mode === 'ble' ? `<button class="btn pri block" id="pqAll" style="margin-bottom:10px">พิมพ์ที่รอทั้งหมด (${nw})</button>` : ''}
     <div class="card list">${list.length ? list.map((j) => `
