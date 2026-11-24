@@ -304,6 +304,7 @@ function finishLogin(j, t0, pic) {
   maybeSaveAppUrl();
   syncImages();
   checkPair();
+  recvLoop();
 }
 
 /* ---------- เข้าสู่ระบบด้วย QR (เครื่องที่ไม่มี LINE เช่น SUNMI) ---------- */
@@ -1386,7 +1387,17 @@ function renderSettings(v) {
         <option value="rawbt">ผ่านแอป RawBT (SUNMI / Android ทุกรุ่น)</option>
         <option value="ble">Bluetooth ตรงจากแอป (Android + Chrome, เครื่อง BLE)</option>
         <option value="share">แชร์รูปใบเสร็จไปแอปเครื่องพิมพ์ (iPhone/iPad)</option>
+        <option value="relay">ส่งไปพิมพ์ที่เครื่อง SUNMI/Android ผ่านอินเทอร์เน็ต (iPhone/iPad)</option>
       </select>
+      <div id="relayBox" class="${p.mode === 'relay' ? '' : 'hidden'}" style="margin-top:10px">
+        <label class="f">เครื่องรับงานพิมพ์</label>
+        <div class="row" style="gap:8px"><select class="inp" id="rtg" style="flex:1"><option value="">${p.target ? esc(p.targetName || p.target) : 'กำลังค้นหา…'}</option></select>
+          <button class="btn" id="rtr" style="flex:none">ค้นหา</button></div>
+        <div class="mut small" style="margin-top:6px">เครื่องรับต้องเปิดแอป PBD POS ค้างไว้ และติ๊ก "รับงานพิมพ์จากเครื่องอื่น" ในหน้านี้ของเครื่องนั้น</div>
+      </div>
+      ${p.mode === 'rawbt' || p.mode === 'ble' ? `<label class="row" style="margin-top:12px"><input type="checkbox" id="rcv" ${p.recv ? 'checked' : ''}><span>รับงานพิมพ์จากเครื่องอื่น (เช่น iPhone) · เปิดแอปค้างไว้</span></label>
+      <div id="rcvBox" class="${p.recv ? '' : 'hidden'}"><label class="f">ชื่อเครื่องนี้ (ให้เครื่องอื่นเห็น)</label>
+        <input class="inp" id="rcn" maxlength="40" value="${esc(recvName())}"></div>` : ''}
       <label class="f">ขนาดกระดาษ</label>
       <div class="seg" style="grid-template-columns:1fr 1fr"><button data-pp="58">58 mm</button><button data-pp="80">80 mm</button></div>
       <div id="rawBox" class="${p.mode === 'rawbt' ? '' : 'hidden'}" style="margin-top:10px">
@@ -1417,6 +1428,25 @@ function renderSettings(v) {
   $('#bleC', v).onclick = async () => { try { await bleConnect(); toast('เชื่อมต่อเครื่องพิมพ์แล้ว'); } catch (e) { toast(e.message, true); } bleStatus(); bleKnown(v); };
   bleStatus();
   if (p.mode === 'ble') bleKnown(v);
+  const rcv = $('#rcv', v);
+  if (rcv) rcv.onchange = (e) => { p.recv = e.target.checked; savePrn(); recvLoop(); render(); };
+  const rcn = $('#rcn', v);
+  if (rcn) rcn.onchange = (e) => { p.recvName = e.target.value.trim(); savePrn(); };
+  const loadRecv = async () => {
+    const sel = $('#rtg', v);
+    if (!sel) return;
+    try {
+      const j = await api('printReceivers', {});
+      const rs = (j.receivers || []).filter((r) => r.device !== S.device);
+      sel.innerHTML = rs.length ? `<option value="">— เลือกเครื่อง —</option>` + rs.map((r) => `<option value="${esc(r.device)}" ${r.device === p.target ? 'selected' : ''}>${esc(r.name)}${r.loc ? ' · ' + esc(locName(r.loc)) : ''}</option>`).join('')
+        : `<option value="">ไม่พบเครื่องที่เปิดรับงานอยู่</option>`;
+    } catch (e) { sel.innerHTML = `<option value="">${esc(e.message)}</option>`; }
+  };
+  if (p.mode === 'relay') {
+    loadRecv();
+    $('#rtr', v).onclick = loadRecv;
+    $('#rtg', v).onchange = (e) => { p.target = e.target.value; p.targetName = e.target.selectedOptions[0] ? e.target.selectedOptions[0].textContent : ''; savePrn(); if (p.target) toast('จะส่งงานพิมพ์ไปที่ ' + p.targetName); };
+  }
   const ro = $('#rawOpen', v);
   if (ro) ro.onclick = () => {
     const fb = encodeURIComponent('https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter');
@@ -2433,12 +2463,13 @@ async function shareCanvas(cv, name) {
 }
 
 let printing = false;
-async function printOps(ops) {
+async function printOps(ops, local) {
   if (printing) return;
+  if (S.prn.mode === 'relay' && !local) return relaySend(ops);
   printing = true;
   try {
     const cv = await drawDoc(ops);
-    const mode = S.prn.mode;
+    const mode = local && S.prn.mode === 'relay' ? 'share' : S.prn.mode;
     if (mode === 'none' || mode === 'share') return shareCanvas(cv, `pbd-${Date.now()}.png`);
     const bytes = canvasToEscPos(cv);
     if (mode === 'rawbt') {
@@ -2456,6 +2487,71 @@ async function printOps(ops) {
   } finally { printing = false; }
 }
 const printBill = (b) => printOps(receiptOps(b));
+
+/* ---------- ส่งงานพิมพ์ข้ามเครื่อง (iPhone/iPad → เครื่อง SUNMI/Android ที่เปิด PBD POS ค้างไว้) ---------- */
+// รูปโลโก้/QR ไม่ส่งไปด้วย: ส่งเป็นชื่ออ้างอิง แล้วเครื่องรับใช้รูปจากตั้งค่าร้านของตัวเอง (ข้อมูลเล็ก ส่งเร็ว)
+function packOps(ops) {
+  const st = (S.data && S.data.settings) || {};
+  return ops.map((o) => {
+    if (o.t !== 'img') return o;
+    const ref = ['logo', 'footerQr', 'payQr'].find((k) => st[k] && st[k] === o.src);
+    return ref ? Object.assign({}, o, { src: '', ref }) : null;
+  }).filter(Boolean);
+}
+function unpackOps(ops) {
+  const st = (S.data && S.data.settings) || {};
+  return (ops || []).map((o) => (o.t === 'img' && o.ref ? Object.assign({}, o, { src: st[o.ref] || '' }) : o)).filter((o) => o.t !== 'img' || o.src);
+}
+async function relaySend(ops) {
+  const p = S.prn;
+  if (!p.target) { toast('ยังไม่ได้เลือกเครื่องรับงานพิมพ์ — ไปที่ ตั้งค่า › เครื่องพิมพ์', true); return; }
+  if (!navigator.onLine) { toast('ต้องต่ออินเทอร์เน็ตเพื่อส่งไปพิมพ์', true); return; }
+  try {
+    toast('กำลังส่งไปพิมพ์…');
+    const r = await api('printSend', { target: p.target, ops: packOps(ops) });
+    toast('ส่งไปพิมพ์ที่ ' + (r.name || p.targetName || 'เครื่องรับ') + ' แล้ว');
+  } catch (e) { toast('ส่งไปพิมพ์ไม่ได้: ' + e.message, true); }
+}
+const RECV = { timer: 0, busy: false, queue: [] };
+const recvName = () => S.prn.recvName || `${deviceModel()} · ${S.loc ? locName(S.loc) : ''}`;
+function recvLoop() {
+  clearTimeout(RECV.timer);
+  if (!S.prn.recv || !S.session) return;
+  RECV.timer = setTimeout(async () => {
+    if (!document.hidden && navigator.onLine && !RECV.busy) {
+      RECV.busy = true;
+      try {
+        const j = await api('printPoll', { device: S.device, name: recvName(), loc: S.loc || '' });
+        (j.jobs || []).forEach((job) => RECV.queue.push(job));
+        if (RECV.queue.length) showRecvJob();
+      } catch (e) { /* ลองรอบหน้า */ }
+      RECV.busy = false;
+    }
+    recvLoop();
+  }, 4000);
+}
+/** งานพิมพ์ที่รับมา: BLE พิมพ์ได้เอง · RawBT ต้องแตะ "พิมพ์" 1 ครั้ง (Android ไม่ให้เว็บเปิดแอปอื่นเองโดยไม่แตะ) */
+async function showRecvJob() {
+  if ($('#rjob')) return;
+  const job = RECV.queue[0];
+  if (!job) return;
+  try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch (x) {}
+  if (S.prn.mode === 'ble') {
+    RECV.queue.shift();
+    await printOps(unpackOps(job.ops));
+    toast('พิมพ์งานจาก ' + job.from);
+    return showRecvJob();
+  }
+  const el = sheet(`${head('งานพิมพ์จาก ' + esc(job.from))}
+    <div id="rjob" class="mut small">${job.title ? esc(job.title) + ' · ' : ''}${hm(job.at)}${RECV.queue.length > 1 ? ` · รออีก ${RECV.queue.length - 1} งาน` : ''}</div>
+    <div class="receipt-prev" id="rjp"></div>
+    <div class="row" style="gap:8px"><button class="btn" id="rjx" style="flex:none">ข้าม</button>
+      <button class="btn pri" id="rjok" style="flex:1">พิมพ์</button></div>`);
+  drawDoc(unpackOps(job.ops)).then((cv) => { const b = $('#rjp', el); if (b) b.appendChild(cv); });
+  const next = () => { RECV.queue.shift(); closeSheet(); setTimeout(showRecvJob, 300); };
+  $('#rjok', el).onclick = () => { printOps(unpackOps(job.ops), true); next(); };
+  $('#rjx', el).onclick = next;
+}
 
 /* ---------- boot ---------- */
 function boot() {
@@ -2483,6 +2579,7 @@ function boot() {
     syncNow();
     refreshData();
     checkPair();
+    recvLoop();
     if (/Line\//i.test(navigator.userAgent)) fillPicture();
   } else {
     showLogin();
