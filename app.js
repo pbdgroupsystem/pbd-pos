@@ -823,6 +823,8 @@ function renderBadge() {
   const p = $('#pend');
   p.textContent = S.syncing ? 'กำลังส่ง…' : `รอส่ง ${n}`;
   p.classList.toggle('hidden', !n && !S.syncing);
+  const q = $('#pqb'), nq = S.pq ? pqWait().length : 0;   // งานพิมพ์รอพิมพ์ (เครื่องรับ)
+  if (q) { q.textContent = `รอพิมพ์ ${nq}`; q.classList.toggle('hidden', !nq); }
   $('#netDot').classList.toggle('off', !navigator.onLine);
   $('#teamName').textContent = S.loc ? locName(S.loc) : 'เลือกทีม';
   drawMe();
@@ -856,7 +858,7 @@ function render() {
   });
   const v = $('#view');
   ({ sell: renderSell, bills: renderBills, shift: renderShift, report: renderReport, settings: renderSettings,
-    loan: renderLoan, stock: renderStock })[S.view](v);
+    loan: renderLoan, stock: renderStock, printq: renderPrintQ })[S.view](v);
   renderSide();
   bindBanners(v);
   renderBadge();
@@ -1712,6 +1714,7 @@ const ICON = {
   report: '<path d="M3 3v18h18"/><path d="M7 15v3M12 10v8M17 6v12"/>',
   settings: '<path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>',
   open: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  printq: '<path d="M6 9V2h12v7"/><rect x="6" y="14" width="12" height="8"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><circle cx="18" cy="12" r="1"/>',
   loan: '<path d="M7 7h11l-3-3M17 17H6l3 3"/>',
   stock: '<path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8M12 13v8"/>',
   sell: '<circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/><path d="M2 3h3l2.6 12.2a2 2 0 0 0 2 1.6h8.2a2 2 0 0 0 2-1.5L22 7H6.2"/>'
@@ -1732,6 +1735,7 @@ function renderSide() {
     ${it('report', 'รายงาน')}
     ${canStock() ? `<div class="sect">สต็อกทีม</div>${it('loan', 'ยืม - คืน สินค้า')}${it('stock', 'สินค้าคงเหลือ')}` : ''}
     <div class="sect">ระบบ</div>
+    ${S.prn.recv || S.pq.length ? it('printq', 'คิวงานพิมพ์', pqWait().length ? `<span class="r pend">${pqWait().length}</span>` : '') : ''}
     ${it('settings', 'ตั้งค่า')}
     <div class="ver">PBD POS ${esc(CFG.APP_VERSION || '')}</div>`;
   $$('[data-sv]', side).forEach((b) => { b.onclick = () => go(b.dataset.sv); });
@@ -2464,26 +2468,28 @@ async function shareCanvas(cv, name) {
 
 let printing = false;
 async function printOps(ops, local) {
-  if (printing) return;
+  if (printing) return false;
   if (S.prn.mode === 'relay' && !local) return relaySend(ops);
   printing = true;
   try {
     const cv = await drawDoc(ops);
     const mode = local && S.prn.mode === 'relay' ? 'share' : S.prn.mode;
-    if (mode === 'none' || mode === 'share') return shareCanvas(cv, `pbd-${Date.now()}.png`);
+    if (mode === 'none' || mode === 'share') { await shareCanvas(cv, `pbd-${Date.now()}.png`); return true; }
     const bytes = canvasToEscPos(cv);
     if (mode === 'rawbt') {
       // ถ้าเครื่องยังไม่มี RawBT จะเปิดหน้า Play Store ให้ติดตั้ง
       const fallback = encodeURIComponent('https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter');
       location.href = 'intent:base64,' + bytesToB64(bytes) +
         '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;S.browser_fallback_url=' + fallback + ';end;';
-      return;
+      return true;
     }
     toast('กำลังพิมพ์…');
     await bleWrite(bytes);
     toast('ส่งไปเครื่องพิมพ์แล้ว');
+    return true;
   } catch (e) {
     toast('พิมพ์ไม่ได้: ' + e.message, true);
+    return false;
   } finally { printing = false; }
 }
 const printBill = (b) => printOps(receiptOps(b));
@@ -2512,8 +2518,39 @@ async function relaySend(ops) {
     toast('ส่งไปพิมพ์ที่ ' + (r.name || p.targetName || 'เครื่องรับ') + ' แล้ว');
   } catch (e) { toast('ส่งไปพิมพ์ไม่ได้: ' + e.message, true); }
 }
-const RECV = { timer: 0, busy: false, queue: [] };
+const RECV = { timer: 0, busy: false, skip: {} };
 const recvName = () => S.prn.recvName || `${deviceModel()} · ${S.loc ? locName(S.loc) : ''}`;
+/* ---------- คิวงานพิมพ์ (เครื่องรับ): รอพิมพ์ / พิมพ์แล้ว — เก็บในเครื่องนี้ ----------
+ * งานที่รับมาเข้าคิวเป็น "รอพิมพ์" ก่อนเสมอ · กดพิมพ์สำเร็จ = "พิมพ์แล้ว" (พิมพ์ซ้ำได้)
+ * กด "ไว้ทีหลัง" = ยังรอพิมพ์อยู่ในคิว · เก็บสูงสุด 60 งาน งานที่พิมพ์แล้วเกิน 3 วันลบอัตโนมัติ */
+S.pq = store.get('pq', []);
+S.pqf = 'all';
+const pqWait = () => S.pq.filter((j) => j.status === 'wait');
+function pqSave() {
+  const cut = Date.now() - 3 * 864e5;
+  S.pq = S.pq.filter((j) => j.status === 'wait' || (j.doneAt || j.got) > cut).slice(-60);
+  if (!store.set('pq', S.pq)) {   // เต็มพื้นที่: ทิ้งข้อมูลพิมพ์ของงานที่พิมพ์แล้ว (เก็บแค่ประวัติ)
+    S.pq.forEach((j) => { if (j.status === 'done') j.ops = null; });
+    store.set('pq', S.pq);
+  }
+}
+function pqAdd(job) {
+  const id = String(job.id || ((job.at || Date.now()) + '|' + (job.from || '')));
+  if (S.pq.some((j) => j.id === id)) return false;
+  S.pq.push({ id, from: job.from || '-', title: job.title || '', at: job.at || Date.now(), got: Date.now(), ops: job.ops || [], status: 'wait', n: 0 });
+  pqSave();
+  return true;
+}
+function pqRefresh() { renderBadge(); if (S.view === 'printq') render(); else renderSide(); }
+async function pqPrint(id) {
+  const j = S.pq.find((x) => x.id === id);
+  if (!j) return false;
+  if (!j.ops || !j.ops.length) { toast('งานนี้ไม่มีข้อมูลสำหรับพิมพ์แล้ว', true); return false; }
+  const ok = await printOps(unpackOps(j.ops), true);
+  if (ok !== false) { j.status = 'done'; j.doneAt = Date.now(); j.n = (j.n || 0) + 1; pqSave(); }
+  pqRefresh();
+  return ok !== false;
+}
 function recvLoop() {
   clearTimeout(RECV.timer);
   if (!S.prn.recv || !S.session) return;
@@ -2522,8 +2559,9 @@ function recvLoop() {
       RECV.busy = true;
       try {
         const j = await api('printPoll', { device: S.device, name: recvName(), loc: S.loc || '' });
-        (j.jobs || []).forEach((job) => RECV.queue.push(job));
-        if (RECV.queue.length) showRecvJob();
+        let added = 0;
+        (j.jobs || []).forEach((job) => { if (pqAdd(job)) added++; });
+        if (added) { pqRefresh(); showRecvJob(); }
       } catch (e) { /* ลองรอบหน้า */ }
       RECV.busy = false;
     }
@@ -2532,25 +2570,55 @@ function recvLoop() {
 }
 /** งานพิมพ์ที่รับมา: BLE พิมพ์ได้เอง · RawBT ต้องแตะ "พิมพ์" 1 ครั้ง (Android ไม่ให้เว็บเปิดแอปอื่นเองโดยไม่แตะ) */
 async function showRecvJob() {
-  if ($('#rjob')) return;
-  const job = RECV.queue[0];
+  if ($('#rjob') || S.view === 'printq') return;   // อยู่หน้าคิวงานพิมพ์อยู่แล้ว ไม่ต้องเด้ง
+  const wait = pqWait().filter((j) => !RECV.skip[j.id]);
+  const job = wait[0];
   if (!job) return;
   try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch (x) {}
   if (S.prn.mode === 'ble') {
-    RECV.queue.shift();
-    await printOps(unpackOps(job.ops));
+    const ok = await pqPrint(job.id);
+    if (!ok) { RECV.skip[job.id] = 1; return; }   // พิมพ์ไม่สำเร็จ → ค้างในคิว "รอพิมพ์"
     toast('พิมพ์งานจาก ' + job.from);
     return showRecvJob();
   }
   const el = sheet(`${head('งานพิมพ์จาก ' + esc(job.from))}
-    <div id="rjob" class="mut small">${job.title ? esc(job.title) + ' · ' : ''}${hm(job.at)}${RECV.queue.length > 1 ? ` · รออีก ${RECV.queue.length - 1} งาน` : ''}</div>
+    <div id="rjob" class="mut small">${job.title ? esc(job.title) + ' · ' : ''}${hm(job.at)}${wait.length > 1 ? ` · รออีก ${wait.length - 1} งาน` : ''}</div>
     <div class="receipt-prev" id="rjp"></div>
-    <div class="row" style="gap:8px"><button class="btn" id="rjx" style="flex:none">ข้าม</button>
+    <div class="row" style="gap:8px"><button class="btn" id="rjx" style="flex:none">ไว้ทีหลัง</button>
+      <button class="btn" id="rjq" style="flex:none">ดูคิว</button>
       <button class="btn pri" id="rjok" style="flex:1">พิมพ์</button></div>`);
   drawDoc(unpackOps(job.ops)).then((cv) => { const b = $('#rjp', el); if (b) b.appendChild(cv); });
-  const next = () => { RECV.queue.shift(); closeSheet(); setTimeout(showRecvJob, 300); };
-  $('#rjok', el).onclick = () => { printOps(unpackOps(job.ops), true); next(); };
-  $('#rjx', el).onclick = next;
+  const next = () => { closeSheet(); setTimeout(showRecvJob, 300); };
+  $('#rjok', el).onclick = () => { pqPrint(job.id); next(); };
+  $('#rjx', el).onclick = () => { RECV.skip[job.id] = 1; next(); };
+  $('#rjq', el).onclick = () => { RECV.skip[job.id] = 1; closeSheet(); go('printq'); };
+}
+function renderPrintQ(v) {
+  const f = S.pqf, all = S.pq.slice().sort((a, b) => b.got - a.got);
+  const list = all.filter((j) => f === 'all' || j.status === f), nw = pqWait().length;
+  const chip = (k, label, n) => `<button class="chip ${f === k ? 'on' : ''}" data-pf="${k}">${label}${n != null ? ' ' + n : ''}</button>`;
+  v.innerHTML = `${banners()}
+    <div class="row" style="margin-bottom:8px"><h3 class="sp" style="font-size:17px">คิวงานพิมพ์</h3>
+      <span class="small" style="color:${S.prn.recv ? 'var(--ok)' : 'var(--mut)'}">${S.prn.recv ? '● รับงานอยู่' : 'ปิดรับงาน'}</span></div>
+    <div class="chips">${chip('all', 'ทั้งหมด', all.length)}${chip('wait', 'รอพิมพ์', nw)}${chip('done', 'พิมพ์แล้ว', all.length - nw)}</div>
+    ${nw > 1 && S.prn.mode === 'ble' ? `<button class="btn pri block" id="pqAll" style="margin-bottom:10px">พิมพ์ที่รอทั้งหมด (${nw})</button>` : ''}
+    <div class="card list">${list.length ? list.map((j) => `
+      <div class="li">
+        <div class="sp"><div class="num">${hm(j.at)} · ${esc(j.from)}</div>
+          <div class="mut small">${j.title ? esc(j.title) + ' · ' : ''}รับเมื่อ ${dt(j.got)}${j.status === 'done' ? ' · พิมพ์ ' + hm(j.doneAt) + (j.n > 1 ? ' (' + j.n + ' ครั้ง)' : '') : ''}</div></div>
+        <div style="text-align:right;display:flex;flex-direction:column;gap:6px;align-items:flex-end">
+          <span class="tag ${j.status === 'done' ? 'ok' : 'wait'}">${j.status === 'done' ? 'พิมพ์แล้ว' : 'รอพิมพ์'}</span>
+          ${j.ops && j.ops.length ? `<button class="btn ${j.status === 'done' ? '' : 'pri'}" data-pp="${esc(j.id)}" style="padding:6px 12px">${j.status === 'done' ? 'พิมพ์ซ้ำ' : 'พิมพ์'}</button>` : ''}
+        </div>
+      </div>`).join('') : `<div class="mut">${f === 'wait' ? 'ไม่มีงานรอพิมพ์' : 'ยังไม่มีงานพิมพ์ที่รับมา'}</div>`}</div>
+    ${all.length - nw ? '<button class="btn block" id="pqClr" style="margin-top:10px">ล้างงานที่พิมพ์แล้ว</button>' : ''}
+    ${S.prn.recv ? '' : '<div class="mut small" style="margin-top:10px">เปิดรับงานได้ที่ ตั้งค่า › เครื่องพิมพ์ใบเสร็จ › รับงานพิมพ์จากเครื่องอื่น</div>'}`;
+  $$('[data-pf]', v).forEach((b) => { b.onclick = () => { S.pqf = b.dataset.pf; render(); }; });
+  $$('[data-pp]', v).forEach((b) => { b.onclick = () => { b.disabled = true; pqPrint(b.dataset.pp); }; });
+  const pa = $('#pqAll', v);
+  if (pa) pa.onclick = async () => { pa.disabled = true; for (const j of pqWait()) { if (!(await pqPrint(j.id))) break; } };
+  const pc = $('#pqClr', v);
+  if (pc) pc.onclick = () => { S.pq = S.pq.filter((j) => j.status !== 'done'); pqSave(); render(); };
 }
 
 /* ---------- boot ---------- */
@@ -2565,6 +2633,7 @@ function boot() {
   $('#qrNew').onclick = startQrLogin;
   $('#teamBtn').onclick = openTeamPicker;
   $('#cartbar').onclick = openCart;
+  $('#pqb').onclick = () => go('printq');
   $$('#nav button').forEach((b) => { b.onclick = () => go(b.dataset.v); });
   window.addEventListener('online', () => { renderBadge(); render(); syncNow(); refreshData(); });
   window.addEventListener('offline', () => { renderBadge(); render(); });
