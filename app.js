@@ -464,14 +464,56 @@ function cartChanged() {
 /* ----- ขั้นตอนเหมือน Loyverse: สินค้า › แบบการขาย › ตัวเลือก + จำนวน + ความคิดเห็น › กรอกราคาขายเอง ----- */
 const STAGES_OF = (kind) => (kind === 'inst' ? ['down', 'splitDown', 'collectDown'] : ['full', 'collect']);
 const planOf = (p) => ({ id: p.id || '', name: p.name || '', kind: p.kind, total: p.total || 0, down: p.down || 0,
-  inst: p.inst || 0, n: p.n || 0, units: p.units || 1 });
+  inst: p.inst || 0, n: p.n || 0, units: p.units || 1, open: !!p.open });
 
 function addToCart(it) {
   const ps = plansOf(it);
-  // ยังไม่มีราคาจากส่วนกลาง: พนักงานใส่ราคาขายเองได้ (ไม่มีส่วนลด/ค้างชำระ)
-  if (!ps.length) return openVariant(it, { id: '', name: 'ราคาตามพนักงานระบุ', kind: 'cash', total: 0, units: 1, open: true });
+  // ยังไม่มีราคาจากส่วนกลาง: พนักงานเลือกสด/ผ่อน แล้วใส่ราคาเอง
+  if (!ps.length) return openPricePlan(it);
   if (ps.length === 1) return openVariant(it, ps[0]);
   pickPlan(it, ps, (p) => openVariant(it, p));
+}
+
+/** สินค้าที่ไม่มีราคาจากส่วนกลาง: เลือก สด / ผ่อน แล้วพนักงานใส่ราคาเอง → ไปหน้าตัวเลือกตามปกติ */
+function openPricePlan(it) {
+  const el = sheet(`${head(it.name)}
+    <div class="mut small">สินค้านี้ยังไม่มีราคาจากส่วนกลาง — เลือกแบบการขายแล้วใส่ราคาเอง</div>
+    <div class="list">
+      <button class="li" data-ok="cash" style="width:100%;text-align:left"><span class="tag ok">สด</span>
+        <span class="sp">ใส่ราคาขาย<br><span class="mut small">ชำระวันสั่งซื้อ · เก็บเพิ่ม</span></span><span class="mut">›</span></button>
+      <button class="li" data-ok="inst" style="width:100%;text-align:left"><span class="tag wait">ผ่อน</span>
+        <span class="sp">ใส่ราคารวม เงินดาวน์ ค่างวด<br><span class="mut small">ดาวน์เต็ม · แบ่งดาวน์ · เก็บเงินดาวน์เพิ่ม</span></span><span class="mut">›</span></button>
+    </div>`);
+  $('[data-ok="cash"]', el).onclick = () => keypad(`${it.name} · ขายสด`, 'ราคาขายต่อชิ้น (พนักงานระบุ)', [], (amt) => {
+    if (!(amt > 0)) return toast('กรอกราคาขาย', true);
+    openVariant(it, { id: '', kind: 'cash', total: amt, units: 1, open: true, name: `สด ${baht(amt)} · ราคาพนักงานระบุ` });
+  });
+  $('[data-ok="inst"]', el).onclick = () => {
+    const f = sheet(`${head(it.name + ' · ขายผ่อน')}
+      <div class="mut small">ราคาพนักงานระบุ (ต่อชิ้น)</div>
+      <label class="f">ราคารวมทั้งสัญญา *</label><input class="inp num" id="oT" inputmode="decimal">
+      <label class="f">เงินดาวน์ *</label><input class="inp num" id="oD" inputmode="decimal">
+      <div class="row" style="gap:8px">
+        <div style="flex:1"><label class="f">ค่างวด</label><input class="inp num" id="oI" inputmode="decimal"></div>
+        <div style="flex:1"><label class="f">จำนวนงวด</label><input class="inp num" id="oN" inputmode="numeric"></div></div>
+      <div class="mut small" id="oHint" style="margin-top:6px"></div>
+      <button class="btn pri block" id="oOk" style="margin-top:14px">ถัดไป</button>`);
+    const n = (id) => Number(String($(id, f).value).replace(/,/g, '')) || 0;
+    const hint = () => {
+      const t = n('#oT'), d = n('#oD'), i = n('#oI'), k = n('#oN');
+      $('#oHint', f).textContent = t && d ? `ยอดผ่อนหลังดาวน์ ${baht(t - d)}` + (i && k ? ` · ค่างวดรวม ${baht(i * k)}${Math.abs(i * k - (t - d)) > 0.5 ? ' (ไม่เท่ากับยอดหลังดาวน์)' : ''}` : '') : '';
+    };
+    ['#oT', '#oD', '#oI', '#oN'].forEach((id) => { $(id, f).oninput = hint; });
+    $('#oOk', f).onclick = () => {
+      const t = n('#oT'), d = n('#oD'), i = n('#oI'), k = Math.round(n('#oN'));
+      if (!(t > 0)) return toast('ใส่ราคารวมทั้งสัญญา', true);
+      if (!(d > 0) || d >= t) return toast('เงินดาวน์ต้องมากกว่า 0 และน้อยกว่าราคารวม', true);
+      if ((i > 0) !== (k > 0)) return toast('ใส่ค่างวดและจำนวนงวดให้ครบทั้งคู่ (หรือเว้นว่างทั้งคู่)', true);
+      const name = (i && k ? `ผ่อน ${baht(i)} × ${k} งวด · ` : 'ผ่อน · ') + `ดาวน์ ${baht(d)} (รวม ${baht(t)}) · ราคาพนักงานระบุ`;
+      openVariant(it, { id: '', kind: 'inst', total: t, down: d, inst: i, n: k, units: 1, open: true, name });
+    };
+    setTimeout(() => $('#oT', f).focus(), 50);
+  };
 }
 
 function pickPlan(it, ps, cb) {
@@ -595,7 +637,7 @@ function askReason(title, cb) {
 function askAmount(o) {
   const p = o.plan, col = o.stage === 'collect' || o.stage === 'collectDown';
   const hints = [];
-  if (o.stage === 'full' && p.total) hints.push({ label: 'ราคามาตรฐาน ' + baht(p.total), value: p.total });
+  if (o.stage === 'full' && p.total) hints.push({ label: (p.open ? 'ราคาขาย ' : 'ราคามาตรฐาน ') + baht(p.total), value: p.total });
   if (o.stage === 'down' && p.down) hints.push({ label: 'ดาวน์ตามแผน ' + baht(p.down), value: p.down });
   if (o.stage === 'splitDown') hints.push({ label: baht(500), value: 500 });
   if (col && o.max) hints.push({ label: 'ค้างทั้งหมด ' + baht(o.max), value: o.max });
@@ -606,7 +648,7 @@ function askAmount(o) {
     });
   }
   const label = col ? 'ยอดที่เก็บ' + (o.max ? ` (ค้าง ${baht(o.max)})` : '')
-    : o.stage === 'full' ? `รับเงินวันนี้${o.qty > 1 ? ' ต่อชิ้น' : ''} · ราคามาตรฐาน ${baht(p.total)}`
+    : o.stage === 'full' ? `รับเงินวันนี้${o.qty > 1 ? ' ต่อชิ้น' : ''} · ${p.open ? 'ราคาขาย' : 'ราคามาตรฐาน'} ${baht(p.total)}`
     : `รับดาวน์วันนี้${o.qty > 1 ? ' ต่อชิ้น' : ''} · ดาวน์ตามแผน ${baht(p.down)}`;
   keypad(`${o.it.name} · ${STAGE[o.stage]}`, label, hints, (amt) => {
     if (!(amt > 0)) return toast('กรอกจำนวนเงิน', true);
@@ -624,6 +666,10 @@ function askAmount(o) {
     // ชำระวันสั่งซื้อ (ขายสด)
     if (amt > p.total + 0.001) return toast('เกินราคามาตรฐาน ' + baht(p.total), true);
     if (amt >= p.total) return putLine(o, 'full', p.total, p.total);
+    if (p.open) { // ราคาที่พนักงานใส่เอง ไม่มีส่วนลด — รับน้อยกว่าราคา = ค้างเก็บเพิ่ม
+      toast('ค้างเก็บเพิ่ม ' + baht((p.total - amt) * o.qty));
+      return putLine(o, 'full', p.total, amt);
+    }
     const el = sheet(`${head('รับ ' + baht(amt) + ' จากราคามาตรฐาน ' + baht(p.total))}
       <button class="btn pri block" id="bal" style="margin-bottom:8px">ค้างเก็บเพิ่ม ${baht((p.total - amt) * o.qty)} (มัดจำ / จ่ายบางส่วน)</button>
       <button class="btn block" id="dsc" style="margin-bottom:8px">ลดราคาเหลือ ${baht(amt)} — จ่ายครบ (ต้องใส่เหตุผล)</button>
@@ -862,7 +908,7 @@ function renderGrid() {
     const insts = ps.filter((p) => p.kind === 'inst');
     const price = cash ? `<span class="pr num">${baht(cash.total)}</span>`
       : insts.length ? `<span class="pr num">ดาวน์ ${baht(Math.min(...insts.map((p) => p.down)))}</span>`
-      : `<span class="pr zero">ใส่ราคาเองตอนขาย</span>`;
+      : `<span class="pr zero">ใส่ราคาเอง · สด/ผ่อน</span>`;
     const src = imgOf(i);
     return `<button class="item${anyImg ? ' hasimg' : ''}" data-id="${esc(i.id)}">
       ${inCart[i.id] ? `<span class="q">${inCart[i.id]}</span>` : ''}
