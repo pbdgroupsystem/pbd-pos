@@ -1762,8 +1762,14 @@ function renderSide() {
     <div class="sect">ระบบ</div>
     ${S.prn.recv || S.pq.length ? it('printq', 'คิวงานพิมพ์', pqWait().length ? `<span class="r pend">${pqWait().length}</span>` : '') : ''}
     ${it('settings', 'ตั้งค่า')}
+    <div class="grow"></div>
+    <button class="logout" id="sideOut"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>ออกจากระบบ</button>
     <div class="ver">PBD POS ${esc(CFG.APP_VERSION || '')}</div>`;
   $$('[data-sv]', side).forEach((b) => { b.onclick = () => go(b.dataset.sv); });
+  $('#sideOut', side).onclick = () => {
+    if (!pendingBills().length && !confirm('ออกจากระบบ?')) return;
+    closeSide(); logout();
+  };
 }
 function openSide() { renderSide(); $('#side').classList.add('open'); $('#sideOv').classList.remove('hidden'); }
 function closeSide() { const s = $('#side'); if (s) s.classList.remove('open'); const o = $('#sideOv'); if (o) o.classList.add('hidden'); }
