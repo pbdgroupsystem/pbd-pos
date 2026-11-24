@@ -1473,11 +1473,7 @@ function openShopSettings() {
 
   $('#pvw', el).onclick = async () => {
     readText();
-    const sample = {
-      id: 'LS1-261116-ABC001', loc: S.loc || 'LS1', createdAt: Date.now(), sellerName: user().name,
-      lines: [{ id: 'X', name: 'กล้อง PBD9888LB Alexander Silver 2 เลนส์', qty: 1, price: 3900 }],
-      subtotal: 3900, discount: 0, total: 3900, method: 'cash', cash: 4000, change: 100, note: ''
-    };
+    const sample = sampleBill();
     const box = $('#spv', el);
     box.innerHTML = '';
     box.classList.remove('hidden');
@@ -2004,13 +2000,41 @@ function shiftOps(s, t) {
     { t: 'gap', h: 1 }
   ];
 }
+/** บิลตัวอย่างสำหรับพิมพ์ทดสอบ/ดูตัวอย่าง — ใช้สินค้าและแผนราคาจริงจากส่วนกลาง (ถ้ามี) */
+function sampleBill() {
+  const its = items().filter((i) => !i.hidden);
+  const findPlan = (kind, skip) => {
+    for (const it of its) { if (it.id === skip) continue; const p = plansOf(it).find((x) => x.kind === kind && x.total > 0); if (p) return { it, p }; }
+    return null;
+  };
+  const c = findPlan('cash') || { it: { id: 'X1', name: 'กล้อง PBD9888LB Alexander Silver 2 เลนส์' }, p: { kind: 'cash', total: 4900, units: 1 } };
+  const i = findPlan('inst', c.it.id) || findPlan('inst') || { it: { id: 'X2', name: 'ไฟโซลาร์เซลล์ PBD Nova X7' }, p: { kind: 'inst', total: 5900, down: 800, inst: 850, n: 6, units: 1 } };
+  const cp = planOf(c.p), ip = planOf(i.p);
+  const part = Math.max(100, Math.round(ip.down / 2 / 100) * 100);
+  const lines = [
+    { key: 'S1', id: c.it.id, name: c.it.name, plan: cp, stage: 'full', due: cp.total, price: cp.total, qty: 1, comment: '' },
+    { key: 'S2', id: i.it.id, name: i.it.name, plan: ip, stage: ip.down > part ? 'splitDown' : 'down', due: ip.down,
+      price: ip.down > part ? part : ip.down, qty: 1, comment: 'ติดตั้งหน้าบ้าน' }
+  ];
+  const total = lines.reduce((a, l) => a + l.price * l.qty, 0);
+  const balance = lines.reduce((a, l) => a + lineBal(l), 0);
+  const cash = Math.ceil(total / 1000) * 1000;
+  const d = new Date(), ymd = String(d.getFullYear()).slice(2) + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0');
+  return {
+    id: `${S.loc || 'LS1'}-${ymd}-TEST01`, loc: S.loc || 'LS1', createdAt: Date.now(), sellerName: user().name || 'พนักงานขาย',
+    cust: { name: 'ลูกค้าตัวอย่าง ใจดี', phone: '0812345678', addr: '99/9 ม.1 ต.มะขามเตี้ย อ.เมืองสุราษฎร์ธานี จ.สุราษฎร์ธานี' },
+    lines, subtotal: total, discount: 0, total, balance, method: 'cash', cash, change: cash - total, note: ''
+  };
+}
 function testOps() {
   return [
-    { t: 'text', s: 'ทดสอบเครื่องพิมพ์', align: 'center', bold: true, scale: 1.3 },
-    { t: 'text', s: 'ภาษาไทย สระ ุ ู ิ ี ึ ื ่ ้ ๊ ๋ ์ ครบ', align: 'center' },
-    { t: 'row', l: 'กล้อง PBD9888LB Alexander Silver 2 เลนส์', r: baht(3900) },
-    { t: 'hr' },
-    { t: 'text', s: `กระดาษ ${S.prn.paper} mm · ${dt(Date.now())}`, align: 'center', scale: 0.85 },
+    { t: 'text', s: '*** พิมพ์ทดสอบ ***', align: 'center', bold: true, scale: 1.2 },
+    { t: 'text', s: 'ไม่ใช่ใบเสร็จจริง', align: 'center', scale: 0.85 },
+    { t: 'gap', h: 0.3 },
+    ...receiptOps(sampleBill()).filter((o) => !(o.t === 'gap' && o.h === 1)),
+    { t: 'text', s: 'ภาษาไทย สระ ุ ู ิ ี ึ ื ่ ้ ๊ ๋ ์ ครบ', align: 'center', scale: 0.8 },
+    { t: 'text', s: `กระดาษ ${S.prn.paper} mm · ${S.prn.mode || ''} · ${dt(Date.now())}`, align: 'center', scale: 0.8 },
+    { t: 'text', s: '*** พิมพ์ทดสอบ ***', align: 'center', bold: true },
     { t: 'gap', h: 1 }
   ];
 }
@@ -2175,7 +2199,7 @@ function boot() {
 }
 
 // สำหรับทดสอบ
-window.__pbdpos = { canvasToEscPos, wrapText, drawDoc, receiptOps };
+window.__pbdpos = { canvasToEscPos, wrapText, drawDoc, receiptOps, testOps };
 
 boot();
 })();
