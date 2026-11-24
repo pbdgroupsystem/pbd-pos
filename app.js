@@ -1195,7 +1195,32 @@ async function showReceipt(bill, fresh) {
   if (vd) vd.onclick = () => voidBill(bill.id);
   const cv = await receiptCanvas(bill);
   const rp = $('#rp', el);
-  if (rp) rp.appendChild(cv);
+  if (!rp) return;
+  if (fresh) { rp.appendChild(cv); return; }
+  // เปิดจากเมนูบิล: ลายน้ำ "ใบเสร็จในระบบ" บนหน้าจอเท่านั้น (ไม่อยู่ในรูปที่พิมพ์/แชร์)
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:relative;display:inline-block;width:100%;max-width:340px;vertical-align:top';
+  wrap.appendChild(cv);
+  wrap.appendChild(watermarkCanvas(cv.width, cv.height, 'ใบเสร็จในระบบ'));
+  rp.appendChild(wrap);
+}
+
+function watermarkCanvas(w, h, text) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  c.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;max-width:none;pointer-events:none';
+  const x = c.getContext('2d');
+  x.fillStyle = 'rgba(229,37,42,0.28)';
+  x.font = `600 ${Math.round(w / 15)}px Sarabun, Kanit, sans-serif`;
+  x.textAlign = 'center'; x.textBaseline = 'middle';
+  const stepX = w * 0.55, stepY = w * 0.32;
+  x.translate(w / 2, h / 2); x.rotate(-Math.PI / 4);
+  const R = Math.hypot(w, h);
+  for (let yy = -R; yy <= R; yy += stepY) {
+    const off = (Math.round(yy / stepY) % 2) * stepX / 2;
+    for (let xx = -R; xx <= R; xx += stepX) x.fillText(text, xx + off, yy);
+  }
+  return c;
 }
 
 async function voidBill(id) {
