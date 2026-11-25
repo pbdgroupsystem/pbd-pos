@@ -1418,6 +1418,8 @@ function renderSettings(v) {
         <label class="f">ขนาดก้อนข้อมูล (ลดลงถ้าพิมพ์ขาด/ค้าง)</label>
         <select class="inp" id="ck">${[20, 100, 180, 512].map((n) => `<option ${p.chunk === n ? 'selected' : ''}>${n}</option>`).join('')}</select>
       </div>
+      <label class="row" style="margin-top:12px"><input type="checkbox" id="slw" ${p.slow ? 'checked' : ''}><span>เครื่องพิมพ์พกพา / พิมพ์หยุดกลางทาง — ส่งข้อมูลช้าลง</span></label>
+      ${p.slow && p.mode === 'rawbt' ? '<div class="mut small">ใน RawBT: ตั้งค่า → ความเร็ว/ความหนาแน่น ลดลงได้อีก ถ้ายังค้าง</div>' : ''}
       <label class="row" style="margin-top:12px"><input type="checkbox" id="ap" ${p.auto ? 'checked' : ''}><span>พิมพ์อัตโนมัติหลังขายเสร็จ</span></label>
       <button class="btn block" id="tp" style="margin-top:10px">พิมพ์ทดสอบ</button>
       <button class="btn pri block" id="prnSave" style="margin-top:8px">บันทึกการตั้งค่าเครื่องพิมพ์</button>
@@ -1433,6 +1435,7 @@ function renderSettings(v) {
   $('#pm', v).onchange = (e) => { p.mode = e.target.value; savePrn(); render(); };
   $$('[data-pp]', v).forEach((b) => { b.classList.toggle('on', +b.dataset.pp === +p.paper); b.onclick = () => { p.paper = +b.dataset.pp; savePrn(); render(); }; });
   $('#ap', v).onchange = (e) => { p.auto = e.target.checked; savePrn(); };
+  $('#slw', v).onchange = (e) => { p.slow = e.target.checked; savePrn(); render(); };
   const ck = $('#ck', v); if (ck) ck.onchange = (e) => { p.chunk = +e.target.value; savePrn(); };
   $('#bleC', v).onclick = async () => { try { await bleConnect(); toast('เชื่อมต่อเครื่องพิมพ์แล้ว'); } catch (e) { toast(e.message, true); } bleStatus(); bleKnown(v); };
   bleStatus();
@@ -1449,6 +1452,7 @@ function renderSettings(v) {
     const g = (id) => $(id, v);
     if (g('#pm')) p.mode = g('#pm').value;
     if (g('#ap')) p.auto = g('#ap').checked;
+    if (g('#slw')) p.slow = g('#slw').checked;
     if (g('#ck')) p.chunk = +g('#ck').value;
     if (g('#rws')) p.ws = g('#rws').checked;
     if (g('#rcv')) p.recv = g('#rcv').checked;
@@ -2481,7 +2485,7 @@ function testOps() {
 function canvasToEscPos(cv) {
   const w = cv.width, h = cv.height;
   const d = cv.getContext('2d').getImageData(0, 0, w, h).data;
-  const bw = Math.ceil(w / 8), band = 128;
+  const bw = Math.ceil(w / 8), band = S.prn.slow ? 24 : 64;   // แบ่งรูปเป็นแถบเล็ก เครื่องพกพาบัฟเฟอร์น้อยจะไม่ค้าง
   const out = [0x1B, 0x40];
   for (let y0 = 0; y0 < h; y0 += band) {
     const bh = Math.min(band, h - y0);
@@ -2581,12 +2585,15 @@ async function bleEnsure() {
 }
 async function bleWrite(bytes) {
   await bleEnsure();
-  const n = S.prn.chunk || 100;
-  const noResp = BLE.ch.properties.writeWithoutResponse && BLE.ch.writeValueWithoutResponse;
+  const slow = !!S.prn.slow;
+  const n = slow ? Math.min(S.prn.chunk || 100, 100) : (S.prn.chunk || 100);
+  const pr = BLE.ch.properties;
+  // โหมดส่งช้า: ใช้แบบรอตอบรับ (ไม่ทำข้อมูลหล่น) ถ้าเครื่องรองรับ + เว้นจังหวะให้หัวพิมพ์ทัน
+  const noResp = pr.writeWithoutResponse && BLE.ch.writeValueWithoutResponse && !(slow && pr.write);
   for (let i = 0; i < bytes.length; i += n) {
     const part = bytes.slice(i, i + n);
-    if (noResp) { await BLE.ch.writeValueWithoutResponse(part); await sleep(6); }
-    else await BLE.ch.writeValue(part);
+    if (noResp) { await BLE.ch.writeValueWithoutResponse(part); await sleep(slow ? 30 : 6); }
+    else { await (BLE.ch.writeValueWithResponse ? BLE.ch.writeValueWithResponse(part) : BLE.ch.writeValue(part)); if (slow) await sleep(10); }
   }
 }
 
