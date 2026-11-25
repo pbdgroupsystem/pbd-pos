@@ -2762,11 +2762,23 @@ async function bleWrite(bytes) {
   const n = slow ? Math.min(S.prn.chunk || 100, 100) : (S.prn.chunk || 100);
   const pr = BLE.ch.properties;
   // โหมดส่งช้า: ใช้แบบรอตอบรับ (ไม่ทำข้อมูลหล่น) ถ้าเครื่องรองรับ + เว้นจังหวะให้หัวพิมพ์ทัน
-  const noResp = pr.writeWithoutResponse && BLE.ch.writeValueWithoutResponse && !(slow && pr.write);
+  let noResp = pr.writeWithoutResponse && BLE.ch.writeValueWithoutResponse && !(slow && pr.write);
+  const once = (part) => (noResp ? BLE.ch.writeValueWithoutResponse(part)
+    : (BLE.ch.writeValueWithResponse ? BLE.ch.writeValueWithResponse(part) : BLE.ch.writeValue(part)));
   for (let i = 0; i < bytes.length; i += n) {
     const part = bytes.slice(i, i + n);
-    if (noResp) { await BLE.ch.writeValueWithoutResponse(part); await sleep(slow ? 30 : 6); }
-    else { await (BLE.ch.writeValueWithResponse ? BLE.ch.writeValueWithResponse(part) : BLE.ch.writeValue(part)); if (slow) await sleep(10); }
+    // "GATT operation failed" มักเกิดชั่วคราวกับเครื่องพิมพ์พกพา — รอแล้วส่งก้อนเดิมซ้ำ (ต่อใหม่ถ้าหลุด) สูงสุด 4 ครั้ง
+    for (let t = 0; ; t++) {
+      try { await once(part); break; }
+      catch (e) {
+        if (t >= 3) throw new Error('ส่งข้อมูลไปเครื่องพิมพ์ไม่สำเร็จ (' + e.message + ') — ลองติ๊ก "ส่งข้อมูลช้าลง" หรือลดขนาดก้อนข้อมูลเป็น 20');
+        await sleep(250 * (t + 1));
+        if (BLE.dev && !BLE.dev.gatt.connected) { BLE.ch = null; await bleAttach(BLE.dev); }
+        // แบบรอตอบรับล้มเหลว → สลับไปส่งแบบไม่รอตอบรับ (เว้นจังหวะนานขึ้น) ถ้าเครื่องรองรับ
+        if (!noResp && BLE.ch.properties.writeWithoutResponse && BLE.ch.writeValueWithoutResponse) noResp = true;
+      }
+    }
+    await sleep(noResp ? (slow ? 30 : 8) : (slow ? 10 : 0));
   }
 }
 
