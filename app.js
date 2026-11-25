@@ -893,6 +893,7 @@ function render() {
 /* ----- sell ----- */
 function renderSell(v) {
   const cats = Array.from(new Set(items().map((i) => i.cat || i.type).filter(Boolean)));
+  if (S.cat && cats.indexOf(S.cat) < 0) S.cat = '';
   v.innerHTML = `${banners()}
     ${!items().length ? `<div class="card mut">ยังไม่มีรายการสินค้า — ต่อเน็ตแล้วไปที่ ตั้งค่า › โหลดสินค้า/ราคาใหม่</div>` : ''}
     <div class="searchrow">
@@ -904,7 +905,10 @@ function renderSell(v) {
     </div>
     ${(() => { const n = outstandingList().filter((o) => o.loc === S.loc).length;
       return `<button class="btn block" id="colBtn" style="margin-bottom:8px">เก็บเพิ่ม / เก็บเงินดาวน์เพิ่ม${n ? ` <span class="pend">${n} รายการค้าง</span>` : ''}</button>`; })()}
-    <div class="chips">${['', ...cats].map((c) => `<button class="chip ${S.cat === c ? 'on' : ''}" data-cat="${esc(c)}">${esc(c || 'ทั้งหมด')}</button>`).join('')}</div>
+    ${cats.length ? `<select class="inp catsel" id="catSel" aria-label="หมวดสินค้า">${['', ...cats].map((c) => {
+      const n = c ? items().filter((i) => (i.cat || i.type) === c).length : items().length;
+      return `<option value="${esc(c)}" ${S.cat === c ? 'selected' : ''}>${esc(c || 'ทุกหมวดสินค้า')} (${n})</option>`;
+    }).join('')}</select>` : ''}
     <div class="grid${S.itemView === 'list' ? ' lst' : ''}" id="grid"></div>`;
   $('#viewBtn', v).onclick = () => { S.itemView = S.itemView === 'list' ? 'grid' : 'list'; store.set('itemView', S.itemView); render(); };
   const q = $('#q', v);
@@ -920,7 +924,8 @@ function renderSell(v) {
   };
   $('#scanBtn', v).onclick = () => openScanner();
   $('#colBtn', v).onclick = openCollect;
-  $$('.chip', v).forEach((c) => { c.onclick = () => { S.cat = c.dataset.cat; render(); }; });
+  const cs = $('#catSel', v);
+  if (cs) cs.onchange = () => { S.cat = cs.value; renderGrid(); };
   renderGrid();
 }
 
