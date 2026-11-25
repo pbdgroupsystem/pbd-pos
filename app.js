@@ -1500,6 +1500,7 @@ const IMG_SPEC = {
 };
 const TEXT_SPEC = [
   ['shopName', 'ชื่อร้าน', 'input'], ['address', 'ที่อยู่', 'textarea'], ['phone', 'เบอร์โทร', 'input'],
+  ['header', 'ข้อความหัวใบเสร็จ (แสดงใต้เบอร์โทร)', 'textarea'],
   ['footer', 'ข้อความท้ายใบเสร็จ', 'textarea'], ['footerQrLabel', 'ข้อความใต้ QR ท้ายใบเสร็จ', 'input'],
   ['payQrLabel', 'ข้อความใต้ QR รับเงิน (ชื่อบัญชี / ธนาคาร)', 'input']
 ];
@@ -2357,6 +2358,7 @@ function receiptOps(b, stIn) {
   ops.push({ t: 'text', s: st.shopName || 'PBD GROUP', align: 'center', bold: true, scale: 1.3 });
   ops.push(...multiline(st.address, { scale: 0.85 }));
   if (st.phone) ops.push({ t: 'text', s: 'โทร ' + st.phone, align: 'center', scale: 0.85 });
+  ops.push(...multiline(st.header, { scale: 0.85 }));
   if (b.copy) ops.push({ t: 'text', s: '*** สำเนา (พิมพ์ซ้ำ ' + dt(Date.now()) + ') ***', align: 'center', bold: true, scale: 0.85 });
   ops.push(
     { t: 'hr' },
