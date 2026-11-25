@@ -3,6 +3,7 @@
 'use strict';
 
 const CFG = window.POS_CONFIG || {};
+{ const v = document.getElementById('loginVer'); if (v) v.textContent = 'PBD POS v' + (CFG.APP_VERSION || ''); }
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
