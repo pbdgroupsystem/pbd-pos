@@ -38,8 +38,13 @@ const S = {
   cartCust: store.get('cartCust', ''),
   bills: store.get('bills', []),
   shifts: store.get('shifts', []),
-  prn: Object.assign({ mode: /Android/i.test(navigator.userAgent) ? 'rawbt' : 'share', paper: 58, auto: false, chunk: 100 }, store.get('prn_bak', {}),
-    store.get('prn', {})),
+  prn: (() => {
+    const p = Object.assign({ mode: /Android/i.test(navigator.userAgent) ? 'ble' : 'share', paper: 58, auto: false, chunk: 100 }, store.get('prn_bak', {}),
+      store.get('prn', {}));
+    if (p.mode === 'rawbt') p.mode = 'ble';   // เลิกใช้ RawBT แล้ว → Bluetooth ตรงจากแอป
+    delete p.ws;
+    return p;
+  })(),
   device: store.get('device', ''),
   view: 'sell', cat: '', q: '',
   syncing: false, authLost: false, report: null, installEvt: null
@@ -1388,7 +1393,6 @@ function renderSettings(v) {
       <label class="f">วิธีพิมพ์</label>
       <select class="inp" id="pm">
         <option value="none">ไม่พิมพ์ (ใช้แชร์รูปเมื่อต้องการ)</option>
-        <option value="rawbt">ผ่านแอป RawBT (SUNMI / Android ทุกรุ่น)</option>
         <option value="ble">Bluetooth ตรงจากแอป (Android + Chrome, เครื่อง BLE)</option>
         <option value="share">แชร์รูปใบเสร็จไปแอปเครื่องพิมพ์ (iPhone/iPad)</option>
         <option value="relay">ส่งไปพิมพ์ที่เครื่อง SUNMI/Android ผ่านอินเทอร์เน็ต (iPhone/iPad)</option>
@@ -1399,18 +1403,11 @@ function renderSettings(v) {
           <button class="btn" id="rtr" style="flex:none">ค้นหา</button></div>
         <div class="mut small" style="margin-top:6px">เครื่องรับต้องเปิดแอป PBD POS ค้างไว้ และติ๊ก "รับงานพิมพ์จากเครื่องอื่น" ในหน้านี้ของเครื่องนั้น</div>
       </div>
-      ${p.mode === 'rawbt' || p.mode === 'ble' ? `<label class="row" style="margin-top:12px"><input type="checkbox" id="rcv" ${p.recv ? 'checked' : ''}><span>รับงานพิมพ์จากเครื่องอื่น (เช่น iPhone) · เปิดแอปค้างไว้</span></label>
+      ${p.mode === 'ble' ? `<label class="row" style="margin-top:12px"><input type="checkbox" id="rcv" ${p.recv ? 'checked' : ''}><span>รับงานพิมพ์จากเครื่องอื่น (เช่น iPhone) · เปิดแอปค้างไว้</span></label>
       <div id="rcvBox" class="${p.recv ? '' : 'hidden'}"><label class="f">ชื่อเครื่องนี้ (ให้เครื่องอื่นเห็น)</label>
         <input class="inp" id="rcn" maxlength="40" value="${esc(recvName())}"></div>` : ''}
       <label class="f">ขนาดกระดาษ</label>
       <div class="seg" style="grid-template-columns:1fr 1fr"><button data-pp="58">58 mm</button><button data-pp="80">80 mm</button></div>
-      <div id="rawBox" class="${p.mode === 'rawbt' ? '' : 'hidden'}" style="margin-top:10px">
-        <button class="btn block" id="rawOpen">เปิด RawBT เพื่อเลือกเครื่องพิมพ์</button>
-        <div class="mut small" style="margin-top:6px">เลือกเครื่องพิมพ์ในแอป RawBT (รายการ Bluetooth ที่จับคู่ไว้ในเครื่อง) · SUNMI เลือก "InnerPrinter" (เครื่องพิมพ์ในตัว)</div>
-        <label class="row" style="margin-top:10px"><input type="checkbox" id="rws" ${p.ws ? 'checked' : ''}><span>พิมพ์อัตโนมัติไม่ต้องแตะ (ผ่านแอป Server for RawBT)</span></label>
-        <div id="rwsBox" class="${p.ws ? '' : 'hidden'}"><div class="mut small" style="margin-top:4px">ติดตั้งแอป "Server for RawBT" (Play Store) ในเครื่องนี้แล้วเปิดค้างไว้ · งานพิมพ์จากเครื่องอื่นและพิมพ์อัตโนมัติหลังขายจะพิมพ์ทันทีไม่ต้องแตะ</div>
-          <button class="btn block" id="rwsT" style="margin-top:8px">ทดสอบการเชื่อมต่อ</button></div>
-      </div>
       <div id="bleBox" class="${p.mode === 'ble' ? '' : 'hidden'}">
         <div class="row"><span class="sp small" id="bleSt"></span><button class="btn" id="bleC">ค้นหาเครื่องพิมพ์</button></div>
         <label class="f">เครื่องพิมพ์ที่เคยเชื่อมต่อ</label>
@@ -1419,7 +1416,6 @@ function renderSettings(v) {
         <select class="inp" id="ck">${[20, 100, 180, 512].map((n) => `<option ${p.chunk === n ? 'selected' : ''}>${n}</option>`).join('')}</select>
       </div>
       <label class="row" style="margin-top:12px"><input type="checkbox" id="slw" ${p.slow ? 'checked' : ''}><span>เครื่องพิมพ์พกพา / พิมพ์หยุดกลางทาง — ส่งข้อมูลช้าลง</span></label>
-      ${p.slow && p.mode === 'rawbt' ? '<div class="mut small">ใน RawBT: ตั้งค่า → ความเร็ว/ความหนาแน่น ลดลงได้อีก ถ้ายังค้าง</div>' : ''}
       <label class="row" style="margin-top:12px"><input type="checkbox" id="ap" ${p.auto ? 'checked' : ''}><span>พิมพ์อัตโนมัติหลังขายเสร็จ</span></label>
       <button class="btn block" id="tp" style="margin-top:10px">พิมพ์ทดสอบ</button>
       <button class="btn pri block" id="prnSave" style="margin-top:8px">บันทึกการตั้งค่าเครื่องพิมพ์</button>
@@ -1440,10 +1436,6 @@ function renderSettings(v) {
   $('#bleC', v).onclick = async () => { try { await bleConnect(); toast('เชื่อมต่อเครื่องพิมพ์แล้ว'); } catch (e) { toast(e.message, true); } bleStatus(); bleKnown(v); };
   bleStatus();
   if (p.mode === 'ble') bleKnown(v);
-  const rws = $('#rws', v);
-  if (rws) rws.onchange = (e) => { p.ws = e.target.checked; savePrn(); render(); };
-  const rwsT = $('#rwsT', v);
-  if (rwsT) rwsT.onclick = async () => { rwsT.disabled = true; try { await rawbtWs(new Uint8Array([0x1b, 0x40, 0x0a])); toast('เชื่อมต่อ Server for RawBT ได้แล้ว'); } catch (e) { toast(e.message, true); } rwsT.disabled = false; };
   const rcv = $('#rcv', v);
   if (rcv) rcv.onchange = (e) => { p.recv = e.target.checked; savePrn(); recvLoop(); render(); };
   const rcn = $('#rcn', v);
@@ -1454,7 +1446,6 @@ function renderSettings(v) {
     if (g('#ap')) p.auto = g('#ap').checked;
     if (g('#slw')) p.slow = g('#slw').checked;
     if (g('#ck')) p.chunk = +g('#ck').value;
-    if (g('#rws')) p.ws = g('#rws').checked;
     if (g('#rcv')) p.recv = g('#rcv').checked;
     if (g('#rcn')) p.recvName = g('#rcn').value.trim();
     const t = g('#rtg'); if (t && t.value) { p.target = t.value; p.targetName = t.selectedOptions[0] ? t.selectedOptions[0].textContent.replace(/ \(ยังไม่ออนไลน์ตอนนี้\)$/, '') : p.targetName; }
@@ -1480,11 +1471,6 @@ function renderSettings(v) {
     $('#rtr', v).onclick = loadRecv;
     $('#rtg', v).onchange = (e) => { p.target = e.target.value; p.targetName = e.target.selectedOptions[0] ? e.target.selectedOptions[0].textContent.replace(/ \(ยังไม่ออนไลน์ตอนนี้\)$/, '') : ''; savePrn(); if (p.target) toast('จะส่งงานพิมพ์ไปที่ ' + p.targetName); };
   }
-  const ro = $('#rawOpen', v);
-  if (ro) ro.onclick = () => {
-    const fb = encodeURIComponent('https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter');
-    location.href = 'intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=ru.a402d.rawbtprinter;S.browser_fallback_url=' + fb + ';end;';
-  };
   $('#tp', v).onclick = () => printOps(testOps());
   $('#rd', v).onclick = () => refreshData(true);
   $('#sy', v).onclick = () => syncNow(true);
@@ -2524,7 +2510,7 @@ const BLE_SERVICES = [
 function bleStatus() {
   const el = $('#bleSt');
   if (!el) return;
-  el.textContent = !navigator.bluetooth ? 'เบราว์เซอร์นี้ไม่รองรับ Bluetooth (ใช้ RawBT หรือแชร์รูป)'
+  el.textContent = !navigator.bluetooth ? 'เบราว์เซอร์นี้ไม่รองรับ Bluetooth (ใช้ Chrome บน Android หรือแชร์รูป)'
     : BLE.ch ? 'เชื่อมต่อแล้ว: ' + (BLE.dev.name || 'เครื่องพิมพ์')
     : 'ยังไม่เชื่อมต่อ' + (store.get('bleName', '') ? ' (ล่าสุด: ' + store.get('bleName', '') + ')' : '');
 }
@@ -2534,7 +2520,7 @@ async function bleAttach(dev) {
   for (let i = 0; !server && i < 3; i++) {
     try { server = await dev.gatt.connect(); } catch (e) { err = e; await sleep(700); }
   }
-  if (!server) throw new Error('ต่อเครื่องพิมพ์ ' + (dev.name || '') + ' ไม่ได้ — เปิดเครื่องพิมพ์ให้อยู่ใกล้ ปิดแอปอื่นที่ต่อเครื่องพิมพ์อยู่ (เช่น RawBT) หรือเปลี่ยนวิธีพิมพ์เป็น RawBT' + (err ? ' (' + err.message + ')' : ''));
+  if (!server) throw new Error('ต่อเครื่องพิมพ์ ' + (dev.name || '') + ' ไม่ได้ — เปิดเครื่องพิมพ์ให้อยู่ใกล้ ปิดแอปอื่นที่ต่อเครื่องพิมพ์อยู่ แล้วปิด-เปิดเครื่องพิมพ์ใหม่' + (err ? ' (' + err.message + ')' : ''));
   const services = await server.getPrimaryServices();
   for (const s of services) {
     for (const c of await s.getCharacteristics()) {
@@ -2546,13 +2532,13 @@ async function bleAttach(dev) {
       }
     }
   }
-  throw new Error('ไม่พบช่องส่งข้อมูลของเครื่องพิมพ์ — ลองใช้ RawBT');
+  throw new Error('ไม่พบช่องส่งข้อมูลของเครื่องพิมพ์ — เครื่องนี้อาจไม่รองรับ Bluetooth แบบ BLE (ใช้แชร์รูปแทน)');
 }
 /** รายการเครื่องพิมพ์ Bluetooth ที่เคยอนุญาตให้แอปนี้ใช้ (Chrome Android) */
 async function bleKnown(v) {
   const box = $('#bleList', v);
   if (!box) return;
-  if (!navigator.bluetooth) { box.innerHTML = '<div class="mut small">เบราว์เซอร์นี้ไม่รองรับ Bluetooth — ใช้ Chrome บน Android หรือเลือก RawBT</div>'; return; }
+  if (!navigator.bluetooth) { box.innerHTML = '<div class="mut small">เบราว์เซอร์นี้ไม่รองรับ Bluetooth — ใช้ Chrome บน Android หรือเลือกแชร์รูป</div>'; return; }
   if (!navigator.bluetooth.getDevices) { box.innerHTML = '<div class="mut small">Chrome รุ่นนี้ยังไม่แสดงรายการที่เคยเชื่อมต่อ — กด "ค้นหาเครื่องพิมพ์" เพื่อเลือกจากรายการใกล้เคียง</div>'; return; }
   let devs = [];
   try { devs = await navigator.bluetooth.getDevices(); } catch (x) {}
@@ -2573,7 +2559,7 @@ async function bleKnown(v) {
   }; });
 }
 async function bleConnect() {
-  if (!navigator.bluetooth) throw new Error('เบราว์เซอร์นี้ไม่รองรับ Bluetooth — ใช้ Chrome บน Android หรือเลือก RawBT');
+  if (!navigator.bluetooth) throw new Error('เบราว์เซอร์นี้ไม่รองรับ Bluetooth — ใช้ Chrome บน Android หรือเลือกแชร์รูป');
   const dev = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: BLE_SERVICES });
   await bleAttach(dev);
 }
@@ -2619,18 +2605,6 @@ async function shareCanvas(cv, name) {
 }
 
 let printing = false;
-/** RawBT แบบไม่ต้องแตะ: แอป "Server for RawBT" เปิด WebSocket ที่ 127.0.0.1:40213 บนเครื่องเดียวกัน → ส่ง ESC/POS ตรงๆ */
-function rawbtWs(bytes) {
-  return new Promise((ok, no) => {
-    let ws, done = false;
-    const fin = (e) => { if (done) return; done = true; clearTimeout(t); try { ws && ws.close(); } catch (x) {} e ? no(e) : ok(true); };
-    const t = setTimeout(() => fin(new Error('เชื่อม Server for RawBT ไม่ได้ (หมดเวลา)')), 5000);
-    try { ws = new WebSocket('ws://127.0.0.1:40213/'); } catch (e) { return fin(new Error('เชื่อม Server for RawBT ไม่ได้')); }
-    ws.binaryType = 'arraybuffer';
-    ws.onopen = () => { try { ws.send(bytes); setTimeout(() => fin(), 600); } catch (e) { fin(e); } };
-    ws.onerror = () => fin(new Error('เชื่อม Server for RawBT ไม่ได้ — เปิดแอป Server for RawBT ไว้หรือยัง'));
-  });
-}
 async function printOps(ops, local, opts = {}) {
   if (printing) return false;
   if (S.prn.mode === 'relay' && !local) return relaySend(ops);
@@ -2647,18 +2621,6 @@ async function printOps(ops, local, opts = {}) {
     const mode = local && S.prn.mode === 'relay' ? 'share' : S.prn.mode;
     if (mode === 'none' || mode === 'share') { await shareCanvas(cv, `pbd-${Date.now()}.png`); return true; }
     const bytes = canvasToEscPos(cv);
-    if (mode === 'rawbt' && S.prn.ws) {
-      try { await rawbtWs(bytes); toast('ส่งไปเครื่องพิมพ์แล้ว'); return true; }
-      catch (e) { if (opts.auto) { toast(e.message, true); return false; } }   // พิมพ์อัตโนมัติ: ไม่ fallback (เปิดแอปอื่นเองไม่ได้ถ้าไม่แตะ)
-    }
-    if (mode === 'rawbt') {
-      if (opts.auto) return false;
-      // ถ้าเครื่องยังไม่มี RawBT จะเปิดหน้า Play Store ให้ติดตั้ง
-      const fallback = encodeURIComponent('https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter');
-      location.href = 'intent:base64,' + bytesToB64(bytes) +
-        '#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;S.browser_fallback_url=' + fallback + ';end;';
-      return true;
-    }
     toast('กำลังพิมพ์…');
     await bleWrite(bytes);
     toast('ส่งไปเครื่องพิมพ์แล้ว');
@@ -2718,7 +2680,7 @@ function pqAdd(job) {
   return true;
 }
 function pqRefresh() { renderBadge(); if (S.view === 'printq') render(); else renderSide(); }
-const canAutoPrint = () => S.prn.mode === 'ble' || (S.prn.mode === 'rawbt' && !!S.prn.ws);
+const canAutoPrint = () => S.prn.mode === 'ble';
 async function pqPrint(id, auto) {
   const j = S.pq.find((x) => x.id === id);
   if (!j) return false;
@@ -2745,14 +2707,14 @@ function recvLoop() {
     recvLoop();
   }, 4000);
 }
-/** งานพิมพ์ที่รับมา: BLE พิมพ์ได้เอง · RawBT ต้องแตะ "พิมพ์" 1 ครั้ง (Android ไม่ให้เว็บเปิดแอปอื่นเองโดยไม่แตะ) */
+/** งานพิมพ์ที่รับมา: โหมด Bluetooth พิมพ์ได้เอง · โหมดอื่นแตะ "พิมพ์" เอง */
 async function showRecvJob() {
   if ($('#rjob') || RECV.auto) return;
   const wait = pqWait().filter((j) => !RECV.skip[j.id]);
   const job = wait[0];
   if (!job) return;
   try { if (navigator.vibrate) navigator.vibrate([200, 100, 200]); } catch (x) {}
-  if (canAutoPrint()) {   // พิมพ์อัตโนมัติทันทีที่งานเข้าคิว (BLE / RawBT + Server for RawBT)
+  if (canAutoPrint()) {   // พิมพ์อัตโนมัติทันทีที่งานเข้าคิว (Bluetooth)
     RECV.auto = true;
     const ok = await pqPrint(job.id, true);
     RECV.auto = false;
