@@ -279,13 +279,28 @@ async function startLogin() {
       return;
     }
     store.del('loginPending');
+    // ID token ของ LINE หมดอายุใน 1 ชม. แต่ LIFF จำตัวเก่าไว้ → ถ้าใกล้หมด/หมดแล้ว ให้ล็อกอิน LINE ใหม่เพื่อขอตัวใหม่
+    const relogin = () => {
+      if (Date.now() - (store.get('liffRelogin', 0) || 0) < 60000) return false;   // กันวนซ้ำ
+      store.set('liffRelogin', Date.now()); store.set('loginPending', 1);
+      msg.textContent = 'กำลังต่ออายุการเข้าสู่ระบบ LINE…';
+      try { liff.logout(); } catch (x) {}
+      liff.login({ redirectUri: location.origin + location.pathname });
+      return true;
+    };
+    let dec = null;
+    try { dec = liff.getDecodedIDToken(); } catch (x) {}
+    if (dec && dec.exp && dec.exp * 1000 < Date.now() + 60000 && relogin()) return;
     const idToken = liff.getIDToken();
     if (!idToken) throw new Error('LINE ไม่ส่ง ID token — เปิด scope openid ในการตั้งค่า LIFF');
     msg.textContent = 'กำลังตรวจสิทธิ์…';
     const t0 = Date.now();
     let pic = '';
     try { pic = (liff.getDecodedIDToken() || {}).picture || ''; } catch (x) {}
-    const j = await api('login', { idToken });
+    let j;
+    try { j = await api('login', { idToken }); }
+    catch (e) { if (/expired/i.test(e.message) && relogin()) return; throw e; }
+    store.del('liffRelogin');
     finishLogin(j, t0, pic);
   } catch (e) {
     store.del('loginPending');
