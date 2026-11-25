@@ -2529,7 +2529,12 @@ function bleStatus() {
     : 'ยังไม่เชื่อมต่อ' + (store.get('bleName', '') ? ' (ล่าสุด: ' + store.get('bleName', '') + ')' : '');
 }
 async function bleAttach(dev) {
-  const server = dev.gatt.connected ? dev.gatt : await dev.gatt.connect();
+  // Android มักต่อไม่ติดครั้งแรก ("Connection attempt failed") — ลองใหม่สูงสุด 3 ครั้ง
+  let server = dev.gatt.connected ? dev.gatt : null, err;
+  for (let i = 0; !server && i < 3; i++) {
+    try { server = await dev.gatt.connect(); } catch (e) { err = e; await sleep(700); }
+  }
+  if (!server) throw new Error('ต่อเครื่องพิมพ์ ' + (dev.name || '') + ' ไม่ได้ — เปิดเครื่องพิมพ์ให้อยู่ใกล้ ปิดแอปอื่นที่ต่อเครื่องพิมพ์อยู่ (เช่น RawBT) หรือเปลี่ยนวิธีพิมพ์เป็น RawBT' + (err ? ' (' + err.message + ')' : ''));
   const services = await server.getPrimaryServices();
   for (const s of services) {
     for (const c of await s.getCharacteristics()) {
@@ -2572,7 +2577,7 @@ async function bleConnect() {
   const dev = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: BLE_SERVICES });
   await bleAttach(dev);
 }
-async function bleEnsure() {
+async function bleEnsure(canPick = true) {
   if (BLE.ch) return;
   if (BLE.dev) return bleAttach(BLE.dev);
   if (navigator.bluetooth && navigator.bluetooth.getDevices) {
@@ -2581,10 +2586,12 @@ async function bleEnsure() {
     const d = devs.find((x) => x.name === name) || devs[0];
     if (d) return bleAttach(d);
   }
+  // เลือกเครื่องพิมพ์ใหม่ได้เฉพาะตอนผู้ใช้แตะปุ่ม (ข้อกำหนดของ Chrome)
+  if (!canPick) throw new Error('ยังไม่ได้เชื่อมต่อเครื่องพิมพ์ — แตะปุ่ม "พิมพ์" เพื่อเลือกเครื่องพิมพ์');
   await bleConnect();
 }
 async function bleWrite(bytes) {
-  await bleEnsure();
+  await bleEnsure(false);
   const slow = !!S.prn.slow;
   const n = slow ? Math.min(S.prn.chunk || 100, 100) : (S.prn.chunk || 100);
   const pr = BLE.ch.properties;
@@ -2629,6 +2636,13 @@ async function printOps(ops, local, opts = {}) {
   if (S.prn.mode === 'relay' && !local) return relaySend(ops);
   printing = true;
   try {
+    // Bluetooth: เชื่อมต่อก่อนวาดใบเสร็จ เพื่อให้ยังอยู่ใน "การแตะ" ของผู้ใช้ (Chrome จะยอมเปิดหน้าเลือกเครื่องพิมพ์)
+    if (S.prn.mode === 'ble' && !(local && S.prn.mode === 'relay')) {
+      if (opts.auto) {
+        try { await bleEnsure(false); }
+        catch (e) { toast('รอพิมพ์: ' + e.message, true); return false; }
+      } else await bleEnsure(true);
+    }
     const cv = await drawDoc(ops);
     const mode = local && S.prn.mode === 'relay' ? 'share' : S.prn.mode;
     if (mode === 'none' || mode === 'share') { await shareCanvas(cv, `pbd-${Date.now()}.png`); return true; }
