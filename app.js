@@ -14,7 +14,7 @@ const ymd = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${pad(d
 const hm = (ms) => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 const dt = (ms) => { const d = new Date(ms); return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear() + 543} ${hm(ms)}`; };
 const sbaht = (n) => (n < 0 ? '-' : n > 0 ? '+' : '') + baht(Math.abs(n));
-const ROLE_TH = { Admin: 'ผู้ดูแลระบบ', BranchAdmin: 'แอดมินประจำสาขา', BranchManager: 'ผู้จัดการสาขา', TeamLead: 'หัวหน้าทีม' };
+const ROLE_TH = { sales: 'พนักงานขาย', Sales: 'พนักงานขาย', Staff: 'พนักงานขาย', Admin: 'ผู้ดูแลระบบ', BranchAdmin: 'แอดมินประจำสาขา', BranchManager: 'ผู้จัดการสาขา', TeamLead: 'หัวหน้าทีม' };
 const METHOD = { cash: 'เงินสด', transfer: 'โอน/QR', other: 'อื่นๆ' };
 
 function randomId(n) {
@@ -387,7 +387,7 @@ function logout() {
   const n = pendingBills().length;
   if (n && !confirm(`มี ${n} บิลที่ยังไม่ได้ส่ง บิลจะยังอยู่ในเครื่องและส่งเมื่อมีคนเข้าสู่ระบบครั้งถัดไป\nออกจากระบบ?`)) return;
   S.session = null; store.del('session');
-  S.sctx = null; S.stock = {}; S.loanLines = []; S.loanHist = null; S.loanInbox = null;
+  S.sctx = null; S.stock = {}; S.loanLines = []; S.loanHist = null; S.loanInbox = null; S.reqs = null;
   // ล้างข้อมูลลูกค้าที่แคชไว้ ให้คนถัดไปที่ล็อกอินเห็นเฉพาะของสาขาตัวเอง
   if (S.data) { S.data.outstanding = []; S.data.outAt = 0; store.set('data', S.data); }
   S.cart = S.cart.filter((l) => !isCollect(l)); saveCart();
@@ -833,6 +833,8 @@ function renderBadge() {
   $('#netDot').classList.toggle('off', !navigator.onLine);
   $('#teamName').textContent = S.loc ? locName(S.loc) : 'เลือกทีม';
   drawMe();
+  const hb = $('#hamBtn');
+  if (hb) { let d = $('.nb', hb); const n = reqInboxCount(); if (!d) { d = document.createElement('span'); d.className = 'nb'; hb.appendChild(d); } d.textContent = n; d.classList.toggle('hidden', !n); }
   const nl = loanInboxCount(), lb = $('#nav button[data-v="loan"]');
   if (lb) { let b = $('.nb', lb); if (!b) { b = document.createElement('span'); b.className = 'nb'; lb.appendChild(b); } b.textContent = nl; b.classList.toggle('hidden', !nl); }
 }
@@ -865,7 +867,7 @@ function render() {
   });
   const v = $('#view');
   ({ sell: renderSell, bills: renderBills, shift: renderShift, report: renderReport, settings: renderSettings,
-    loan: renderLoan, stock: renderStock, printq: renderPrintQ })[S.view](v);
+    loan: renderLoan, stock: renderStock, printq: renderPrintQ, approve: renderApprove })[S.view](v);
   renderSide();
   bindBanners(v);
   renderBadge();
@@ -1192,21 +1194,10 @@ async function showReceipt(bill, fresh) {
       <span class="mut">${esc(bill.id)}</span></div>
     ${bill.err ? `<div class="banner" style="margin-top:8px">${esc(bill.err)}</div>` : ''}
     <div class="receipt-prev" id="rp"></div>
-    <div class="row" style="flex-wrap:wrap">
-      ${fresh || ymd(bill.createdAt) === ymd(Date.now()) ? `<button class="btn pri sp" id="pr">${fresh ? 'พิมพ์' : 'พิมพ์ซ้ำ'}</button>
-      <button class="btn sp" id="sh">แชร์รูป</button>` : '<div class="mut small sp">พิมพ์ซ้ำได้เฉพาะวันที่ขาย</div>'}
-      ${!fresh && user().manager && !bill.void ? `<button class="btn sp" id="vd">ยกเลิกบิล</button>` : ''}
-    </div>
+    <div class="row" style="flex-wrap:wrap" id="rbtn">${receiptBtns(bill, fresh)}</div>
+    ${!fresh ? `<div id="rreq">${reqNotes(bill)}</div>` : ''}
     ${fresh ? `<button class="btn ok block" style="margin-top:8px" data-close>ขายบิลถัดไป</button>` : ''}`);
-  const copy = fresh ? bill : Object.assign({}, bill, { copy: true });
-  const pr = $('#pr', el), shb = $('#sh', el);
-  if (pr) pr.onclick = () => {
-    if (!fresh && ymd(bill.createdAt) !== ymd(Date.now())) return toast('พิมพ์ซ้ำได้เฉพาะวันที่ขาย', true);
-    printBill(copy);
-  };
-  if (shb) shb.onclick = async () => shareCanvas(await receiptCanvas(copy), `receipt-${bill.id}.png`);
-  const vd = $('#vd', el);
-  if (vd) vd.onclick = () => voidBill(bill.id);
+  bindReceiptBtns(el, bill, fresh);
   const cv = await receiptCanvas(bill);
   const rp = $('#rp', el);
   if (!rp) return;
@@ -1237,11 +1228,167 @@ function watermarkCanvas(w, h, text) {
   return c;
 }
 
-async function voidBill(id) {
+/* ---------- คำขออนุมัติ: พิมพ์ซ้ำ / ยกเลิกบิล ---------- */
+const REPRINT_ROLES = ['Admin', 'BranchAdmin', 'BranchManager', 'TeamLead'];
+const canReprintDirect = () => REPRINT_ROLES.indexOf(user().role) >= 0;   // หัวหน้าทีม/ผู้จัดการ: พิมพ์ซ้ำได้เลย
+const canVoidDirect = () => ['Admin', 'BranchAdmin'].indexOf(user().role) >= 0;   // แอดมินสาขา/แอดมินใหญ่: ยกเลิกได้เลย
+const isApprover = () => canReprintDirect();
+const reqsOf = (billId, type) => ((S.reqs && S.reqs.list) || []).filter((q) => q.mine && q.billId === billId && q.type === type);
+const reqInbox = () => ((S.reqs && S.reqs.list) || []).filter((q) => q.canDecide);
+const reqInboxCount = () => reqInbox().length;
+function reprintReady(billId) {   // สิทธิ์พิมพ์ซ้ำที่อนุมัติแล้ว (ใช้ได้ครั้งเดียว · พิมพ์ไม่ออกลองซ้ำได้ใน 10 นาที)
+  return reqsOf(billId, 'REPRINT').find((q) => q.status === 'APPROVED' || (q.status === 'USED' && Date.now() - q.usedAt < 10 * 60000));
+}
+async function loadReqs() {
+  const j = await api('reqList', {});
+  S.reqs = { list: j.requests || [], at: Date.now() };
+  renderBadge(); renderSide();
+  return S.reqs;
+}
+setInterval(() => { if (S.session && navigator.onLine && !document.hidden) loadReqs().catch(() => {}); }, 2 * 60000);
+setTimeout(() => { if (S.session && navigator.onLine) loadReqs().catch(() => {}); }, 3000);
+
+function receiptBtns(bill, fresh) {
+  const today = ymd(bill.createdAt) === ymd(Date.now());
+  let h = '';
+  if (fresh || (today && canReprintDirect())) {
+    h += `<button class="btn pri sp" id="pr">${fresh ? 'พิมพ์' : 'พิมพ์ซ้ำ'}</button><button class="btn sp" id="sh">แชร์รูป</button>`;
+  } else if (!today) {
+    h += '<div class="mut small sp">พิมพ์ซ้ำได้เฉพาะวันที่ขาย</div>';
+  } else if (!bill.void) {
+    const ok = reprintReady(bill.id), pend = reqsOf(bill.id, 'REPRINT').find((q) => q.status === 'PENDING');
+    h += ok ? '<button class="btn pri sp" id="pra">พิมพ์ซ้ำ (อนุมัติแล้ว)</button>'
+      : pend ? '<button class="btn sp" disabled>รออนุมัติพิมพ์ซ้ำ</button>'
+      : '<button class="btn pri sp" id="rqp">ขอพิมพ์ซ้ำ</button>';
+  }
+  if (!fresh && !bill.void) {
+    const vp = reqsOf(bill.id, 'VOID').find((q) => q.status === 'PENDING');
+    h += canVoidDirect() ? '<button class="btn sp" id="vd">ยกเลิกบิล</button>'
+      : vp ? '<button class="btn sp" disabled>รออนุมัติยกเลิกบิล</button>'
+      : '<button class="btn sp" id="rqv">ขอยกเลิกบิล</button>';
+  }
+  return h;
+}
+function reqNotes(bill) {
+  const rs = reqsOf(bill.id, 'REPRINT').concat(reqsOf(bill.id, 'VOID')).slice(0, 4);
+  return rs.map((q) => `<div class="li small" style="padding:6px 0">
+      <span class="tag ${q.status === 'PENDING' ? 'wait' : q.status === 'REJECTED' ? 'err' : 'ok'}">${q.type === 'VOID' ? 'ยกเลิกบิล' : 'พิมพ์ซ้ำ'} · ${esc(q.statusTh)}</span>
+      <span class="sp mut">${hm(q.at)}${q.decidedBy ? ' · ' + esc(q.decidedBy) : ''}${q.note ? ' · ' + esc(q.note) : ''}</span>
+      ${q.status === 'PENDING' ? `<button class="btn" data-rqc="${esc(q.id)}" style="flex:none;padding:4px 10px">ยกเลิกคำขอ</button>` : ''}</div>`).join('');
+}
+function bindReceiptBtns(el, bill, fresh) {
+  const copy = fresh ? bill : Object.assign({}, bill, { copy: true });
+  const redraw = () => {
+    const rb = $('#rbtn', el); if (rb) rb.innerHTML = receiptBtns(bill, fresh);
+    const rr = $('#rreq', el); if (rr) rr.innerHTML = reqNotes(bill);
+    bindReceiptBtns(el, bill, fresh);
+  };
+  const on = (id, fn) => { const b = $(id, el); if (b) b.onclick = fn; };
+  on('#pr', () => {
+    if (!fresh && ymd(bill.createdAt) !== ymd(Date.now())) return toast('พิมพ์ซ้ำได้เฉพาะวันที่ขาย', true);
+    printBill(copy);
+  });
+  on('#sh', async () => shareCanvas(await receiptCanvas(copy), `receipt-${bill.id}.png`));
+  on('#vd', () => voidBill(bill.id));
+  on('#pra', async (e) => {
+    const q = reprintReady(bill.id);
+    if (!q) return;
+    e.target.disabled = true;
+    try { await api('reqUse', { id: q.id }); if (q.status !== 'USED') { q.status = 'USED'; q.usedAt = Date.now(); } await printBill(copy); }
+    catch (x) { toast(x.message, true); }
+    loadReqs().then(redraw).catch(redraw);
+  });
+  on('#rqp', () => askReqReason('ขอพิมพ์ซ้ำ ' + bill.id, 'เหตุผล (ไม่บังคับ)', ['กระดาษติด/พิมพ์ไม่ออก', 'ลูกค้าขอเพิ่ม', 'ใบเสร็จหาย'], false,
+    (r) => sendReq('REPRINT', bill, r, () => { closeSheet(); printBill(copy); }).then(redraw)));
+  on('#rqv', () => askReqReason('ขอยกเลิกบิล ' + bill.id, 'เหตุผลที่ยกเลิกบิล *', ['ลูกค้ายกเลิก', 'คีย์ผิด', 'เปลี่ยนสินค้า'], true,
+    (r) => sendReq('VOID', bill, r, () => voidBill(bill.id, r)).then(redraw)));
+  $$('[data-rqc]', el).forEach((b) => { b.onclick = async () => {
+    b.disabled = true;
+    try { const r = await api('reqCancel', { id: b.dataset.rqc }); toast(r.message); } catch (x) { toast(x.message, true); }
+    loadReqs().then(redraw).catch(redraw);
+  }; });
+}
+function askReqReason(title, label, chips, required, cb) {
+  const el = sheet(`${head(title)}
+    <label class="f">${label}</label><input class="inp" id="qr" maxlength="200">
+    <div class="row" style="flex-wrap:wrap;gap:6px;margin-top:8px">${chips.map((t) => `<button class="chip" data-r="${t}">${t}</button>`).join('')}</div>
+    <button class="btn pri block" id="qok" style="margin-top:14px">ส่งคำขอ</button>`);
+  $$('[data-r]', el).forEach((b) => { b.onclick = () => { $('#qr', el).value = b.dataset.r; }; });
+  $('#qok', el).onclick = () => {
+    const r = $('#qr', el).value.trim();
+    if (required && r.length < 2) return toast('ใส่เหตุผล', true);
+    closeSheet(); cb(r);
+  };
+}
+/** ส่งคำขอ · ถ้าเซิร์ฟเวอร์ตอบว่ามีสิทธิ์ทำเองได้ (direct) ก็ทำเลย */
+async function sendReq(type, bill, reason, direct) {
+  if (!navigator.onLine) return toast('ส่งคำขอต้องต่ออินเทอร์เน็ต', true);
+  const local = S.bills.find((b) => b.id === bill.id);
+  if (local && !local.synced) { await syncNow(); if (!local.synced) return toast('ส่งบิลนี้ขึ้นระบบไม่ได้ ยังส่งคำขอไม่ได้', true); }
+  try {
+    const r = await api('reqCreate', { type, billId: bill.id, reason });
+    if (r.direct) return direct();
+    toast(r.message || 'ส่งคำขอแล้ว');
+    await loadReqs();
+  } catch (x) { toast(x.message, true); }
+}
+
+/* ----- หน้าคำขออนุมัติ ----- */
+function renderApprove(v) {
+  const rs = S.reqs;
+  if (!rs || Date.now() - rs.at > 60000) {
+    if (navigator.onLine) loadReqs().then(() => { if (S.view === 'approve') render(); }).catch((e) => toast(e.message, true));
+    if (!rs) { v.innerHTML = `${banners()}<div class="card mut">${navigator.onLine ? 'กำลังโหลดคำขอ…' : 'ต้องต่ออินเทอร์เน็ต'}</div>`; return; }
+  }
+  const inbox = reqInbox(), mine = rs.list.filter((q) => q.mine);
+  const card = (q, act) => `<div class="li" style="display:block">
+      <div class="row"><span class="tag ${q.type === 'VOID' ? 'err' : 'wait'}">${q.type === 'VOID' ? 'ขอยกเลิกบิล' : 'ขอพิมพ์ซ้ำ'}</span>
+        <b class="sp num" style="margin-left:6px">${esc(q.billId)}</b><span class="mut small">${dt(q.at)}</span></div>
+      <div class="small" style="margin-top:4px">${esc(locName(q.loc))} · ขอโดย ${esc(q.byName)}${q.reason ? ' · ' + esc(q.reason) : ''}</div>
+      ${act ? `<div class="row" style="gap:8px;margin-top:8px"><button class="btn" data-bv="${esc(q.billId)}" style="flex:none">ดูบิล</button>
+        <button class="btn" data-rj="${esc(q.id)}" style="flex:1">ไม่อนุมัติ</button><button class="btn ok" data-ap="${esc(q.id)}" style="flex:1">อนุมัติ</button></div>`
+      : `<div class="small" style="margin-top:4px"><span class="tag ${q.status === 'PENDING' ? 'wait' : q.status === 'REJECTED' ? 'err' : 'ok'}">${esc(q.statusTh)}</span>
+        <span class="mut">${q.decidedBy ? esc(q.decidedBy) + ' ' + dt(q.decidedAt) : ''}${q.note ? ' · ' + esc(q.note) : ''}</span></div>`}</div>`;
+  v.innerHTML = `${banners()}
+    <div class="row" style="margin-bottom:8px"><h2 class="sp" style="font-size:20px">คำขออนุมัติ</h2><button class="btn" id="rqr" style="flex:none">รีเฟรช</button></div>
+    ${isApprover() ? `<div class="card"><h3 style="font-size:16px">รอคุณอนุมัติ · ${inbox.length}</h3>
+      <div class="list">${inbox.map((q) => card(q, true)).join('') || '<div class="mut">ไม่มีคำขอที่รออนุมัติ</div>'}</div>
+      <div class="mut small" style="margin-top:6px">พิมพ์ซ้ำ: หัวหน้าทีม / ผู้จัดการที่ดูแลทีม · ยกเลิกบิล: แอดมินสาขา / แอดมินใหญ่</div></div>` : ''}
+    <div class="card"><h3 style="font-size:16px">คำขอของฉัน (3 วันล่าสุด)</h3>
+      <div class="list">${mine.map((q) => card(q, false)).join('') || '<div class="mut">ยังไม่มีคำขอ</div>'}</div></div>`;
+  $('#rqr', v).onclick = () => { S.reqs.at = 0; render(); };
+  const decide = async (id, ok, note, btn) => {
+    btn.disabled = true;
+    try {
+      const r = await api('reqDecide', { id, ok, note: note || '' });
+      toast(r.message || 'บันทึกแล้ว');
+      const q = S.reqs.list.find((x) => x.id === id);
+      if (q && ok && q.type === 'VOID') { const lb = S.bills.find((b) => b.id === q.billId); if (lb) { lb.void = true; saveBills(); } }
+      await loadReqs().catch(() => {});
+      render();
+    } catch (x) { btn.disabled = false; toast(x.message, true); }
+  };
+  $$('[data-ap]', v).forEach((b) => { b.onclick = () => {
+    const q = S.reqs.list.find((x) => x.id === b.dataset.ap);
+    if (q && q.type === 'VOID' && !confirm('อนุมัติยกเลิกบิล ' + q.billId + '? บิลจะถูกยกเลิกทันที')) return;
+    decide(b.dataset.ap, true, '', b);
+  }; });
+  $$('[data-rj]', v).forEach((b) => { b.onclick = () => {
+    const el = sheet(`${head('ไม่อนุมัติ')}<label class="f">เหตุผล *</label><input class="inp" id="rjr" maxlength="200">
+      <button class="btn pri block" id="rjok" style="margin-top:12px">ยืนยันไม่อนุมัติ</button>`);
+    $('#rjok', el).onclick = () => { const r = $('#rjr', el).value.trim(); if (!r) return toast('ใส่เหตุผล', true); closeSheet(); decide(b.dataset.rj, false, r, b); };
+  }; });
+  $$('[data-bv]', v).forEach((b) => { b.onclick = () => {
+    const lb = S.bills.find((x) => x.id === b.dataset.bv);
+    if (lb) showReceipt(lb); else toast('บิลนี้ไม่ได้อยู่ในเครื่องนี้ — ดูได้ที่หน้ารายงาน');
+  }; });
+}
+
+async function voidBill(id, presetReason) {
   if (!navigator.onLine) return toast('ยกเลิกบิลต้องต่ออินเทอร์เน็ต', true);
   const local = S.bills.find((b) => b.id === id);
   if (local && !local.synced) { await syncNow(); if (!local.synced) return toast('ส่งบิลนี้ขึ้นระบบไม่ได้ ยังยกเลิกไม่ได้', true); }
-  const reason = prompt('เหตุผลที่ยกเลิกบิล ' + id);
+  const reason = presetReason || prompt('เหตุผลที่ยกเลิกบิล ' + id);
   if (!reason || !reason.trim()) return;
   try {
     await api('voidBill', { billId: id, reason: reason.trim() });
@@ -1369,8 +1516,13 @@ function drawReport(out) {
     <div class="card"><h3 style="font-size:16px">รายการบิล</h3><div class="list">${r.bills.map((b) => `
       <div class="li"><div class="sp"><div class="num">${b.date.slice(5)} ${esc(b.time)} · ${esc(b.loc)}</div><div class="mut small">${esc(b.id)} · ${esc(b.seller)}</div></div>
       <div style="text-align:right"><div class="num" ${b.status === 'VOID' ? 'style="text-decoration:line-through"' : ''}>${baht(b.total)}</div>
-      ${b.status === 'VOID' ? '<span class="tag void">ยกเลิก</span>' : (user().manager ? `<button class="mut small" data-vb="${esc(b.id)}">ยกเลิกบิล</button>` : '')}</div></div>`).join('') || '<div class="mut">-</div>'}</div></div>`;
-  $$('[data-vb]', out).forEach((b) => { b.onclick = () => voidBill(b.dataset.vb); });
+      ${b.status === 'VOID' ? '<span class="tag void">ยกเลิก</span>' : `<button class="mut small" data-vb="${esc(b.id)}">${canVoidDirect() ? 'ยกเลิกบิล' : 'ขอยกเลิกบิล'}</button>`}</div></div>`).join('') || '<div class="mut">-</div>'}</div></div>`;
+  $$('[data-vb]', out).forEach((b) => { b.onclick = () => {
+    if (canVoidDirect()) return voidBill(b.dataset.vb);
+    const bill = { id: b.dataset.vb };
+    askReqReason('ขอยกเลิกบิล ' + bill.id, 'เหตุผลที่ยกเลิกบิล *', ['ลูกค้ายกเลิก', 'คีย์ผิด', 'เปลี่ยนสินค้า'], true,
+      (r) => sendReq('VOID', bill, r, () => voidBill(bill.id, r)));
+  }; });
 }
 
 /* ----- settings ----- */
@@ -1736,6 +1888,7 @@ const ICON = {
   report: '<path d="M3 3v18h18"/><path d="M7 15v3M12 10v8M17 6v12"/>',
   settings: '<path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>',
   open: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  approve: '<path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9"/>',
   printq: '<path d="M6 9V2h12v7"/><rect x="6" y="14" width="12" height="8"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><circle cx="18" cy="12" r="1"/>',
   loan: '<path d="M7 7h11l-3-3M17 17H6l3 3"/>',
   stock: '<path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8M12 13v8"/>',
@@ -1755,6 +1908,7 @@ function renderSide() {
     ${it('bills', 'บิล', pendingBills().length ? `<span class="r pend">${pendingBills().length}</span>` : '')}
     ${it('shift', 'กะ/เงินสด')}
     ${it('report', 'รายงาน')}
+    ${it('approve', 'คำขออนุมัติ', reqInboxCount() ? `<span class="r pend">${reqInboxCount()}</span>` : '')}
     ${canStock() ? `<div class="sect">สต็อกทีม</div>${it('loan', 'ยืม - คืน สินค้า', loanInboxCount() ? `<span class="r pend">${loanInboxCount()}</span>` : '')}${it('stock', 'สินค้าคงเหลือ')}` : ''}
     <div class="sect">ระบบ</div>
     ${S.prn.recv || S.pq.length ? it('printq', 'คิวงานพิมพ์', pqWait().length ? `<span class="r pend">${pqWait().length}</span>` : '') : ''}
