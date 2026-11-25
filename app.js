@@ -382,7 +382,7 @@ function logout() {
   const n = pendingBills().length;
   if (n && !confirm(`มี ${n} บิลที่ยังไม่ได้ส่ง บิลจะยังอยู่ในเครื่องและส่งเมื่อมีคนเข้าสู่ระบบครั้งถัดไป\nออกจากระบบ?`)) return;
   S.session = null; store.del('session');
-  S.sctx = null; S.stock = {}; S.loanLines = []; S.loanHist = null;
+  S.sctx = null; S.stock = {}; S.loanLines = []; S.loanHist = null; S.loanInbox = null;
   // ล้างข้อมูลลูกค้าที่แคชไว้ ให้คนถัดไปที่ล็อกอินเห็นเฉพาะของสาขาตัวเอง
   if (S.data) { S.data.outstanding = []; S.data.outAt = 0; store.set('data', S.data); }
   S.cart = S.cart.filter((l) => !isCollect(l)); saveCart();
@@ -828,6 +828,8 @@ function renderBadge() {
   $('#netDot').classList.toggle('off', !navigator.onLine);
   $('#teamName').textContent = S.loc ? locName(S.loc) : 'เลือกทีม';
   drawMe();
+  const nl = loanInboxCount(), lb = $('#nav button[data-v="loan"]');
+  if (lb) { let b = $('.nb', lb); if (!b) { b = document.createElement('span'); b.className = 'nb'; lb.appendChild(b); } b.textContent = nl; b.classList.toggle('hidden', !nl); }
 }
 
 function renderCartBar() {
@@ -1758,7 +1760,7 @@ function renderSide() {
     ${it('bills', 'บิล', pendingBills().length ? `<span class="r pend">${pendingBills().length}</span>` : '')}
     ${it('shift', 'กะ/เงินสด')}
     ${it('report', 'รายงาน')}
-    ${canStock() ? `<div class="sect">สต็อกทีม</div>${it('loan', 'ยืม - คืน สินค้า')}${it('stock', 'สินค้าคงเหลือ')}` : ''}
+    ${canStock() ? `<div class="sect">สต็อกทีม</div>${it('loan', 'ยืม - คืน สินค้า', loanInboxCount() ? `<span class="r pend">${loanInboxCount()}</span>` : '')}${it('stock', 'สินค้าคงเหลือ')}` : ''}
     <div class="sect">ระบบ</div>
     ${S.prn.recv || S.pq.length ? it('printq', 'คิวงานพิมพ์', pqWait().length ? `<span class="r pend">${pqWait().length}</span>` : '') : ''}
     ${it('settings', 'ตั้งค่า')}
@@ -1855,13 +1857,14 @@ function renderLoan(v) {
   const teams = loanTeams();
   if (!teams.length) { v.innerHTML = '<div class="card mut">บัญชีนี้ยังไม่ได้อยู่ในทีม — ให้ Admin ตั้งทีมในหน้าจัดการผู้ใช้</div>'; return; }
   // ยืม = ยืมของจากทีมอื่นในสาขาเดียวกันเข้าทีมเรา · คืน = คืนของให้ทีมที่ยืมมา (เอกสารโอนระหว่างทีม ย้ายสต็อกทันที)
-  const tab = ['BORROW', 'GIVEBACK', 'HIST'].indexOf(S.loanTab) >= 0 ? S.loanTab : 'BORROW';
+  const tab = ['BORROW', 'GIVEBACK', 'APPROVE', 'HIST'].indexOf(S.loanTab) >= 0 ? S.loanTab : (loanInboxCount() ? 'APPROVE' : 'BORROW');
   if (teams.indexOf(S.loanTeam) < 0) S.loanTeam = teams.indexOf(S.loc) >= 0 ? S.loc : teams[0];
   const team = S.loanTeam, br = teamBranch(team);
   const others = ((S.sctx && S.sctx.teams) || []).filter((t) => t.parent === br && t.id !== team).map((t) => t.id);
   if (others.indexOf(S.loanOther) < 0) S.loanOther = others[0] || '';
   const other = S.loanOther;
-  const tabs = `<div class="chips" style="margin-bottom:8px">${[['BORROW', 'ยืม (จากทีมอื่น)'], ['GIVEBACK', 'คืน (ให้ทีมที่ยืม)'], ['HIST', 'ประวัติ']].map(([k, t]) =>
+  const nIn = loanInboxCount();
+  const tabs = `<div class="chips" style="margin-bottom:8px">${[['BORROW', 'ยืม (จากทีมอื่น)'], ['GIVEBACK', 'คืน (ให้ทีมที่ยืม)'], ['APPROVE', 'รออนุมัติ' + (nIn ? ` (${nIn})` : '')], ['HIST', 'ประวัติ']].map(([k, t]) =>
     `<button class="chip ${tab === k ? 'on' : ''}" data-lt="${k}">${t}</button>`).join('')}</div>
     <label class="f" style="margin-top:0">ทีมของเรา</label>
     <select class="inp" id="lteam" style="margin-bottom:8px" ${teams.length < 2 ? 'disabled' : ''}>${teams.map((id) => `<option value="${esc(id)}" ${id === team ? 'selected' : ''}>${esc(sName(id))}</option>`).join('')}</select>
@@ -1877,8 +1880,47 @@ function renderLoan(v) {
     if (d.type === 'ISSUE') return ['เบิกสโตร์', 'ok'];
     if (d.type === 'RETURN') return ['คืนสโตร์', 'wait'];
     const back = /^POS คืน/.test(d.note || '');
-    return d.to === team ? [back ? 'รับคืน' : 'ยืมเข้า', 'ok'] : [back ? 'คืนออก' : 'ให้ยืม', 'wait'];
+    const k = d.to === team ? [back ? 'รับคืน' : 'ยืมเข้า', 'ok'] : [back ? 'คืนออก' : 'ให้ยืม', 'wait'];
+    if (d.pending) return ['ขอ' + (back ? 'คืน' : 'ยืม'), 'wait'];
+    if (d.status && d.status !== 'เสร็จแล้ว') return [k[0] + ' · ' + d.status, ''];
+    return k;
   };
+  if (tab === 'APPROVE') {
+    const ib = S.loanInbox;
+    if (!ib || Date.now() - ib.at > 60000) {
+      if (!ib) { v.innerHTML = `${banners()}${tabs}<div class="card mut">กำลังโหลดคำขอที่รออนุมัติ…</div>`; bind(); }
+      loadLoanInbox().then(() => { if (S.view === 'loan') render(); }).catch((e) => toast(e.message, true));
+      if (!ib) return;
+    }
+    v.innerHTML = `${banners()}${tabs}
+      <div class="row" style="margin-bottom:6px"><span class="mut small sp">คำขอยืม-คืนที่คุณอนุมัติได้ · ${ib.docs.length} รายการ</span><button class="btn" id="ir" style="flex:none">รีเฟรช</button></div>
+      <div class="card list">${ib.docs.map((d) => `<div class="li" style="display:block">
+        <div class="row"><span class="tag wait">${/^POS คืน/.test(d.note || '') ? 'ขอคืน' : 'ขอยืม'}</span><span class="sp num">${esc(d.date)}</span><b class="num">${d.total} ชิ้น</b></div>
+        <div class="small" style="margin:2px 0">${esc(sName(d.from))} → ${esc(sName(d.to))}</div>
+        <div class="small">${d.lines.map((l) => esc(l.name) + ' ×' + l.qty).join(', ')}</div>
+        <div class="mut small">${esc(d.id)} · ขอโดย ${esc(d.by)}${d.note ? ' · ' + esc(d.note) : ''}</div>
+        <div class="row" style="gap:8px;margin-top:8px"><button class="btn" data-rj="${esc(d.id)}" style="flex:1">ไม่อนุมัติ</button>
+          <button class="btn ok" data-ap="${esc(d.id)}" style="flex:1">อนุมัติ</button></div></div>`).join('') || '<div class="mut">ไม่มีคำขอที่รออนุมัติ</div>'}</div>
+      <div class="mut small" style="margin-top:6px">ยืม: ทีมเจ้าของของเป็นผู้อนุมัติ · คืน: ทีมที่รับของคืนเป็นผู้อนุมัติ · สต็อกย้ายเมื่อกดอนุมัติ</div>`;
+    bind();
+    $('#ir', v).onclick = () => { S.loanInbox = null; render(); };
+    const decide = async (id, ok, reason, btn) => {
+      btn.disabled = true;
+      try {
+        const r = await api('loanDecide', { docId: id, ok, reason: reason || '' });
+        toast(r.message || 'บันทึกแล้ว');
+        S.loanInbox.docs = S.loanInbox.docs.filter((d) => d.id !== id);
+        S.stock = {}; S.loanHist = null; renderBadge(); render();
+      } catch (x) { btn.disabled = false; toast(x.message, true); }
+    };
+    $$('[data-ap]', v).forEach((b) => { b.onclick = () => { if (confirm('อนุมัติ ' + b.dataset.ap + ' และย้ายสต็อก?')) decide(b.dataset.ap, true, '', b); }; });
+    $$('[data-rj]', v).forEach((b) => { b.onclick = () => {
+      const el = sheet(`${head('ไม่อนุมัติ ' + esc(b.dataset.rj))}<label class="f">เหตุผล *</label><input class="inp" id="rjr" maxlength="200">
+        <button class="btn pri block" id="rjok" style="margin-top:12px">ยืนยันไม่อนุมัติ</button>`);
+      $('#rjok', el).onclick = (e) => { const r = $('#rjr', el).value.trim(); if (!r) return toast('ใส่เหตุผล', true); closeSheet(); decide(b.dataset.rj, false, r, e.target); };
+    }; });
+    return;
+  }
   if (tab === 'HIST') {
     const h = S.loanHist && S.loanHist.team === team ? S.loanHist : null;
     if (!h) {
@@ -1895,9 +1937,19 @@ function renderLoan(v) {
           <span class="sp num">${esc(d.date)}</span><b class="num">${d.total} ชิ้น</b></div>
         <div class="mut small">${esc(d.id)} · ${esc(sName(d.from))} → ${esc(sName(d.to))} · ${esc(d.by)}</div>
         <div class="small">${d.lines.map((l) => esc(l.name) + ' ×' + l.qty).join(', ')}</div>
-        ${d.note ? `<div class="mut small">${esc(d.note)}</div>` : ''}</div>`).join('') || '<div class="mut">ยังไม่มีรายการยืม-คืน</div>'}</div>`;
+        ${d.pending ? `<div class="small" style="color:var(--warn)">รออนุมัติจาก ${esc(sName(d.approverTeam))}</div>` : ''}
+        ${d.note ? `<div class="mut small">${esc(d.note)}</div>` : ''}
+        ${d.canCancel ? `<button class="btn" data-cx="${esc(d.id)}" style="margin-top:6px">ยกเลิกคำขอ</button>` : ''}
+        ${d.canDecide ? `<button class="btn ok" data-go-ap="1" style="margin-top:6px">ไปอนุมัติ</button>` : ''}</div>`).join('') || '<div class="mut">ยังไม่มีรายการยืม-คืน</div>'}</div>`;
     bind();
     $('#hr', v).onclick = () => { S.loanHist = null; render(); };
+    $$('[data-go-ap]', v).forEach((b) => { b.onclick = () => { S.loanTab = 'APPROVE'; S.loanInbox = null; render(); }; });
+    $$('[data-cx]', v).forEach((b) => { b.onclick = async () => {
+      if (!confirm('ยกเลิกคำขอ ' + b.dataset.cx + '?')) return;
+      b.disabled = true;
+      try { const r = await api('loanCancel', { docId: b.dataset.cx }); toast(r.message || 'ยกเลิกแล้ว'); S.loanHist = null; render(); }
+      catch (x) { b.disabled = false; toast(x.message, true); }
+    }; });
     return;
   }
   if (!other) { v.innerHTML = `${banners()}${tabs}<div class="card mut">สาขานี้ไม่มีทีมอื่นให้ยืม-คืน</div>`; bind(); return; }
@@ -1910,7 +1962,7 @@ function renderLoan(v) {
   }
   const owe = {};
   if (tab === 'GIVEBACK') (S.loanHist.docs || []).forEach((d) => {
-    if (d.type !== 'T2T') return;
+    if (d.type !== 'T2T' || (d.status && d.status !== 'เสร็จแล้ว')) return;
     const sign = d.from === other && d.to === team && !/^POS คืน/.test(d.note || '') ? 1 : d.from === team && d.to === other && /^POS คืน/.test(d.note || '') ? -1 : 0;
     if (sign) (d.lines || []).forEach((l) => { owe[l.name] = (owe[l.name] || 0) + sign * l.qty; });
   });
@@ -1924,7 +1976,7 @@ function renderLoan(v) {
   const tot = lines.reduce((a, l) => a + l.qty, 0);
   v.innerHTML = `${banners()}${tabs}
     <div class="card" style="margin-bottom:8px"><div class="row"><span class="sp">${esc(sName(from))}</span><span class="mut">→</span><span class="sp" style="text-align:right">${esc(sName(to))}</span></div>
-      <div class="mut small">${tab === 'BORROW' ? 'ยืมของจากทีม ' + esc(sName(other)) + ' เข้าทีมเรา' : 'คืนของให้ทีม ' + esc(sName(other))} · ย้ายสต็อกทันทีเมื่อยืนยัน</div></div>
+      <div class="mut small">${tab === 'BORROW' ? 'ยืมของจากทีม ' + esc(sName(other)) + ' เข้าทีมเรา' : 'คืนของให้ทีม ' + esc(sName(other))} · ส่งคำขอ แล้วย้ายสต็อกเมื่อผู้จัดการ/หัวหน้าทีม ${esc(sName(other))} อนุมัติ</div></div>
     ${tab === 'GIVEBACK' ? `<div class="card" style="margin-bottom:8px"><div class="row"><b class="sp" style="font-size:14px">ค้างคืนทีม ${esc(sName(other))}</b>${oweList.length ? '<button class="btn" id="lall" style="flex:none;padding:6px 12px">ใส่ทั้งหมด</button>' : ''}</div>
       <div class="small ${oweList.length ? '' : 'mut'}" style="margin-top:4px">${oweList.length ? oweList.map((k) => esc(k) + ' ×' + owe[k]).join(', ') : 'ไม่มียอดค้างคืน (ดูจากประวัติ 90 วัน)'}</div></div>` : ''}
     <div class="row" style="gap:8px;margin-bottom:6px"><button class="btn pri" id="ladd" style="flex:1">+ เพิ่มสินค้า</button>
@@ -1934,7 +1986,7 @@ function renderLoan(v) {
         <button class="qbtn" data-m="${i}">−</button><span class="qv">${l.qty}</span><button class="qbtn" data-p="${i}">+</button>
         <button class="qbtn" data-x="${i}" aria-label="ลบ">×</button></div>`).join('') || '<div class="mut">ยังไม่มีรายการ — กด "+ เพิ่มสินค้า" หรือสแกนบาร์โค้ด</div>'}</div>
     <input class="inp" id="lnote" placeholder="หมายเหตุ (ไม่บังคับ)" maxlength="200" value="${esc(S.loanNote || '')}" style="margin-top:8px">
-    <button class="btn ${tab === 'BORROW' ? 'ok' : 'pri'} block" id="lgo" style="margin-top:10px" ${tot ? '' : 'disabled'}>ยืนยัน${tab === 'BORROW' ? 'ยืม' : 'คืน'} ${tot} ชิ้น</button>`;
+    <button class="btn ${tab === 'BORROW' ? 'ok' : 'pri'} block" id="lgo" style="margin-top:10px" ${tot ? '' : 'disabled'}>ส่งคำขอ${tab === 'BORROW' ? 'ยืม' : 'คืน'} ${tot} ชิ้น</button>`;
   bind();
   const addItem = (it) => keypad(`${it.name}`, `จำนวนที่${tab === 'BORROW' ? 'ยืม' : 'คืน'} · ${tab === 'BORROW' ? sName(other) + ' มี' : 'ทีมเรามี'} ${have(it.id)}`, [], (n) => {
     n = Math.round(n);
@@ -1961,10 +2013,11 @@ function renderLoan(v) {
   $('#lnote', v).oninput = (e) => { S.loanNote = e.target.value; };
   $('#lgo', v).onclick = () => {
     if (!navigator.onLine) return toast('ต้องต่ออินเทอร์เน็ตเพื่อยืม-คืน', true);
-    const el = sheet(`${head(tab === 'BORROW' ? 'ยืนยันยืมสินค้า' : 'ยืนยันคืนสินค้า')}
+    const el = sheet(`${head(tab === 'BORROW' ? 'ส่งคำขอยืมสินค้า' : 'ส่งคำขอคืนสินค้า')}
       <div class="mut">${esc(sName(from))} → ${esc(sName(to))}</div>
       <div class="card" style="margin:10px 0">${lines.map((l) => `<div class="row"><span class="sp">${esc(sItem(l.itemId).name)}</span><b class="num">${l.qty}</b></div>`).join('')}</div>
-      <button class="btn ok block" id="lok">ยืนยัน ${tot} ชิ้น</button>`);
+      <div class="mut small" style="margin-bottom:10px">สต็อกจะย้ายเมื่อผู้จัดการหรือหัวหน้าทีม ${esc(sName(other))} กดอนุมัติ</div>
+      <button class="btn ok block" id="lok">ส่งคำขอ ${tot} ชิ้น</button>`);
     $('#lok', el).onclick = async (e) => {
       e.target.disabled = true; e.target.textContent = 'กำลังบันทึก…';
       try {
@@ -1973,10 +2026,23 @@ function renderLoan(v) {
         toast(r.message || 'บันทึกแล้ว');
         S.loanLines = []; S.loanNote = ''; S.loanKey = ''; delete S.stock[from]; delete S.stock[to]; S.loanHist = null;
         render();
-      } catch (x) { e.target.disabled = false; e.target.textContent = 'ยืนยัน ' + tot + ' ชิ้น'; toast(x.message, true); }
+      } catch (x) { e.target.disabled = false; e.target.textContent = 'ส่งคำขอ ' + tot + ' ชิ้น'; toast(x.message, true); }
     };
   };
 }
+/* ---------- คำขอยืม-คืนที่รออนุมัติ (ตัวเลขบนเมนู) ---------- */
+const loanInboxCount = () => (canStock() && S.loanInbox ? S.loanInbox.docs.length : 0);
+async function loadLoanInbox() {
+  const j = await api('stockDocs', { inbox: true, days: 30 });
+  S.loanInbox = { docs: (j.docs || []).filter((d) => d.canDecide), at: Date.now() };
+  renderBadge();
+  return S.loanInbox;
+}
+setInterval(() => {
+  if (S.session && canStock() && navigator.onLine && !document.hidden) loadLoanInbox().catch(() => {});
+}, 3 * 60000);
+setTimeout(() => { if (S.session && canStock() && navigator.onLine) loadLoanInbox().catch(() => {}); }, 4000);
+
 function pickStockItem(src, tab, cb) {
   const all = (S.sctx.items || []);
   const el = sheet(`${head('เลือกสินค้า')}
