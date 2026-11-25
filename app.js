@@ -2348,8 +2348,10 @@ function ditherRegion(ctx, x, y, w, h) {
   ctx.putImageData(img, x, y);
 }
 
-const multiline = (s, extra) => String(s || '').split(/\r?\n/).filter((x) => x.trim())
-  .map((x) => Object.assign({ t: 'text', s: x, align: 'center' }, extra));
+/** แยกบรรทัดตามที่พิมพ์ไว้ · บรรทัดว่างตรงกลางคงไว้เป็นช่องว่าง (ตัดเฉพาะบรรทัดว่างหัว/ท้าย) */
+const multiline = (s, extra) => String(s || '').replace(/^\s*\n|\n\s*$/g, '').replace(/^\s+$/, '').split(/\r?\n/)
+  .filter((x, i, a) => a.length > 1 || x.trim())
+  .map((x) => Object.assign({ t: 'text', s: x.trim() ? x : ' ', align: 'center' }, extra));
 
 function receiptOps(b, stIn) {
   const st = stIn || (S.data && S.data.settings) || {};
