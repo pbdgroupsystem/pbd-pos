@@ -903,8 +903,6 @@ function renderSell(v) {
         : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6h12M9 12h12M9 18h12"/><circle cx="4" cy="6" r="1.2"/><circle cx="4" cy="12" r="1.2"/><circle cx="4" cy="18" r="1.2"/></svg>'}</button>
       <button class="iconbtn" id="scanBtn" aria-label="สแกน"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8v8M10 8v8M14 8v8M17 8v8"/></svg></button>
     </div>
-    ${(() => { const n = outstandingList().filter((o) => o.loc === S.loc).length;
-      return `<button class="btn block" id="colBtn" style="margin-bottom:8px">เก็บเพิ่ม / เก็บเงินดาวน์เพิ่ม${n ? ` <span class="pend">${n} รายการค้าง</span>` : ''}</button>`; })()}
     ${cats.length ? `<select class="inp catsel" id="catSel" aria-label="หมวดสินค้า">${['', ...cats].map((c) => {
       const n = c ? items().filter((i) => (i.cat || i.type) === c).length : items().length;
       return `<option value="${esc(c)}" ${S.cat === c ? 'selected' : ''}>${esc(c || 'ทุกหมวดสินค้า')} (${n})</option>`;
@@ -923,7 +921,6 @@ function renderSell(v) {
     else toast('ไม่พบสินค้า: ' + code, true);
   };
   $('#scanBtn', v).onclick = () => openScanner();
-  $('#colBtn', v).onclick = openCollect;
   const cs = $('#catSel', v);
   if (cs) cs.onchange = () => { S.cat = cs.value; renderGrid(); };
   renderGrid();
@@ -1909,6 +1906,7 @@ const ICON = {
   report: '<path d="M3 3v18h18"/><path d="M7 15v3M12 10v8M17 6v12"/>',
   settings: '<path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>',
   open: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  collect: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/><path d="M6 15h4"/><path d="M16 15h2"/>',
   approve: '<path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9"/>',
   printq: '<path d="M6 9V2h12v7"/><rect x="6" y="14" width="12" height="8"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><circle cx="18" cy="12" r="1"/>',
   loan: '<path d="M7 7h11l-3-3M17 17H6l3 3"/>',
@@ -1924,6 +1922,8 @@ function renderSide() {
   const it = (v, label, extra) => `<button class="si ${S.view === v ? 'on' : ''}" data-sv="${v}">${svg(v)}<span>${label}</span>${extra || ''}</button>`;
   side.innerHTML = `<div class="sme">${$('#me') ? $('#me').innerHTML : ''}</div>
     ${it('sell', 'ขาย')}
+    ${(() => { const n = outstandingList().filter((o) => o.loc === S.loc).length;
+      return `<button class="si" id="sideCol">${svg('collect')}<span>เก็บเพิ่ม / เก็บเงินดาวน์เพิ่ม</span>${n ? `<span class="r pend">${n}</span>` : ''}</button>`; })()}
     <button class="si" data-sv="shift" data-open="1">${svg('open')}<span>${sh ? 'ปิดกะ' : 'เปิดกะ'}</span>
       <span class="r mut small">${sh ? 'เปิดอยู่ ' + hm(sh.openAt) : S.loc ? 'ยังไม่เปิด' : ''}</span></button>
     ${it('bills', 'บิล', pendingBills().length ? `<span class="r pend">${pendingBills().length}</span>` : '')}
@@ -1938,6 +1938,7 @@ function renderSide() {
     <button class="logout" id="sideOut"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>ออกจากระบบ</button>
     <div class="ver">PBD POS ${esc(CFG.APP_VERSION || '')}</div>`;
   $$('[data-sv]', side).forEach((b) => { b.onclick = () => go(b.dataset.sv); });
+  $('#sideCol', side).onclick = () => { if (S.view !== 'sell') go('sell'); else closeSide(); openCollect(); };
   $('#sideOut', side).onclick = () => {
     if (!pendingBills().length && !confirm('ออกจากระบบ?')) return;
     closeSide(); logout();
