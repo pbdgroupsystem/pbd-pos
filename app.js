@@ -46,7 +46,7 @@ const S = {
     return p;
   })(),
   device: store.get('device', ''),
-  view: 'sell', cat: '', q: '',
+  view: 'sell', cat: '', q: '', itemView: store.get('itemView', 'grid'),
   syncing: false, authLost: false, report: null, installEvt: null
 };
 if (!S.device) { S.device = randomId(3); store.set('device', S.device); }
@@ -879,12 +879,16 @@ function renderSell(v) {
     ${!items().length ? `<div class="card mut">ยังไม่มีรายการสินค้า — ต่อเน็ตแล้วไปที่ ตั้งค่า › โหลดสินค้า/ราคาใหม่</div>` : ''}
     <div class="searchrow">
       <input class="search" id="q" placeholder="ค้นหา / ยิงบาร์โค้ด" value="${esc(S.q)}" autocomplete="off" enterkeyhint="search">
+      <button class="iconbtn" id="viewBtn" aria-label="${S.itemView === 'list' ? 'แสดงแบบตาราง' : 'แสดงแบบรายการ'}" title="สลับ ตาราง / รายการ">${S.itemView === 'list'
+        ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>'
+        : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6h12M9 12h12M9 18h12"/><circle cx="4" cy="6" r="1.2"/><circle cx="4" cy="12" r="1.2"/><circle cx="4" cy="18" r="1.2"/></svg>'}</button>
       <button class="iconbtn" id="scanBtn" aria-label="สแกน"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8v8M10 8v8M14 8v8M17 8v8"/></svg></button>
     </div>
     ${(() => { const n = outstandingList().filter((o) => o.loc === S.loc).length;
       return `<button class="btn block" id="colBtn" style="margin-bottom:8px">เก็บเพิ่ม / เก็บเงินดาวน์เพิ่ม${n ? ` <span class="pend">${n} รายการค้าง</span>` : ''}</button>`; })()}
     <div class="chips">${['', ...cats].map((c) => `<button class="chip ${S.cat === c ? 'on' : ''}" data-cat="${esc(c)}">${esc(c || 'ทั้งหมด')}</button>`).join('')}</div>
-    <div class="grid" id="grid"></div>`;
+    <div class="grid${S.itemView === 'list' ? ' lst' : ''}" id="grid"></div>`;
+  $('#viewBtn', v).onclick = () => { S.itemView = S.itemView === 'list' ? 'grid' : 'list'; store.set('itemView', S.itemView); render(); };
   const q = $('#q', v);
   q.oninput = () => { S.q = q.value; renderGrid(); };
   q.onkeydown = (e) => {

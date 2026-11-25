@@ -118,6 +118,15 @@ nav button.on svg{color:var(--red)}
 .item .pimg{display:block;width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:10px;background:#fff}
 .item .pimg.ph{display:grid;place-items:center;background:var(--card2);color:var(--mut);font-size:12px;border-radius:10px;overflow:hidden}
 .item.hasimg .nm{-webkit-line-clamp:2;margin-top:2px}
+.grid.lst{grid-template-columns:1fr;gap:6px}
+.lst .item{flex-direction:row;align-items:center;min-height:60px;padding:8px 12px;gap:12px}
+.lst .item.hasimg{padding:6px 12px 6px 6px;justify-content:space-between}
+.lst .item .pimg{width:56px;height:56px;aspect-ratio:auto;flex:none;border-radius:8px}
+.lst .item .pimg.ph{font-size:9px;text-align:center;word-break:break-all}
+.lst .item .nm{flex:1;min-width:0;-webkit-line-clamp:2;margin:0}
+.lst .item>span:last-child{flex:none;text-align:right;max-width:42%}
+.lst .item .pr.zero{font-size:12px}
+.lst .item .q{top:-6px;right:auto;left:-6px}
 .item .q{position:absolute;top:-6px;right:-6px;background:var(--red);color:#fff;border-radius:999px;min-width:24px;height:24px;
   display:grid;place-items:center;font-size:13px;font-weight:700;padding:0 6px}
 
