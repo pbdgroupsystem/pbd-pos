@@ -2904,9 +2904,10 @@ function pqSave() {
     store.set('pq', S.pq);
   }
 }
+function pqForget(ids) { store.set('pqx', (store.get('pqx', []) || []).concat(ids).slice(-200)); }
 function pqAdd(job) {
   const id = String(job.id || ((job.at || Date.now()) + '|' + (job.from || '')));
-  if (S.pq.some((j) => j.id === id)) return false;
+  if (S.pq.some((j) => j.id === id) || (store.get('pqx', []) || []).indexOf(id) >= 0) return false;   // ยกเลิกไปแล้วไม่รับซ้ำ
   S.pq.push({ id, from: job.from || '-', title: job.title || '', at: job.at || Date.now(), got: Date.now(), ops: job.ops || [], status: 'wait', n: 0 });
   pqSave();
   return true;
@@ -2983,9 +2984,11 @@ function renderPrintQ(v) {
           <div class="mut small">${j.title ? esc(j.title) + ' · ' : ''}รับเมื่อ ${dt(j.got)}${j.status === 'done' ? ' · พิมพ์ ' + hm(j.doneAt) + (j.n > 1 ? ' (' + j.n + ' ครั้ง)' : '') : ''}</div></div>
         <div style="text-align:right;display:flex;flex-direction:column;gap:6px;align-items:flex-end">
           <span class="tag ${j.status === 'done' ? 'ok' : 'wait'}">${j.status === 'done' ? 'พิมพ์แล้ว' : 'รอพิมพ์'}</span>
-          ${j.ops && j.ops.length ? `<button class="btn ${j.status === 'done' ? '' : 'pri'}" data-pp="${esc(j.id)}" style="padding:6px 12px">${j.status === 'done' ? 'พิมพ์ซ้ำ' : 'พิมพ์'}</button>` : ''}
+          <div class="row" style="gap:6px">${j.status !== 'done' ? `<button class="btn" data-px="${esc(j.id)}" style="padding:6px 12px">ยกเลิก</button>` : ''}
+          ${j.ops && j.ops.length ? `<button class="btn ${j.status === 'done' ? '' : 'pri'}" data-pp="${esc(j.id)}" style="padding:6px 12px">${j.status === 'done' ? 'พิมพ์ซ้ำ' : 'พิมพ์'}</button>` : ''}</div>
         </div>
       </div>`).join('') : `<div class="mut">${f === 'wait' ? 'ไม่มีงานรอพิมพ์' : 'ยังไม่มีงานพิมพ์ที่รับมา'}</div>`}</div>
+    ${nw > 1 ? `<button class="btn block" id="pqXall" style="margin-top:10px">ยกเลิกงานที่รอพิมพ์ทั้งหมด (${nw})</button>` : ''}
     ${all.length - nw ? '<button class="btn block" id="pqClr" style="margin-top:10px">ล้างงานที่พิมพ์แล้ว</button>' : ''}
     ${S.prn.recv ? '' : '<div class="mut small" style="margin-top:10px">เปิดรับงานได้ที่ ตั้งค่า › เครื่องพิมพ์ใบเสร็จ › รับงานพิมพ์จากเครื่องอื่น</div>'}`;
   $$('[data-pf]', v).forEach((b) => { b.onclick = () => { S.pqf = b.dataset.pf; render(); }; });
@@ -2994,6 +2997,16 @@ function renderPrintQ(v) {
   if (pa) pa.onclick = async () => { pa.disabled = true; for (const j of pqWait()) { if (!(await pqPrint(j.id))) break; } };
   const pc = $('#pqClr', v);
   if (pc) pc.onclick = () => { S.pq = S.pq.filter((j) => j.status !== 'done'); pqSave(); render(); };
+  $$('[data-px]', v).forEach((b) => { b.onclick = () => {
+    const j = S.pq.find((x) => x.id === b.dataset.px);
+    if (!confirm('ยกเลิกงานพิมพ์' + (j ? ' ' + hm(j.at) + ' · ' + j.from : '') + '?')) return;
+    pqForget([b.dataset.px]); S.pq = S.pq.filter((x) => x.id !== b.dataset.px); pqSave(); renderBadge(); render(); toast('ยกเลิกงานพิมพ์แล้ว');
+  }; });
+  const px = $('#pqXall', v);
+  if (px) px.onclick = () => {
+    if (!confirm('ยกเลิกงานที่รอพิมพ์ทั้งหมด ' + nw + ' งาน?')) return;
+    pqForget(pqWait().map((j) => j.id)); S.pq = S.pq.filter((j) => j.status === 'done'); pqSave(); renderBadge(); render(); toast('ยกเลิกงานที่รอพิมพ์แล้ว');
+  };
 }
 
 /* ---------- boot ---------- */
