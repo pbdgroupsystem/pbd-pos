@@ -2719,7 +2719,23 @@ async function bleKnown(v) {
   const box = $('#bleList', v);
   if (!box) return;
   if (!navigator.bluetooth) { box.innerHTML = '<div class="mut small">เบราว์เซอร์นี้ไม่รองรับ Bluetooth — ใช้ Chrome บน Android หรือเลือกแชร์รูป</div>'; return; }
-  if (!navigator.bluetooth.getDevices) { box.innerHTML = '<div class="mut small">Chrome รุ่นนี้ยังไม่แสดงรายการที่เคยเชื่อมต่อ — กด "ค้นหาเครื่องพิมพ์" เพื่อเลือกจากรายการใกล้เคียง</div>'; return; }
+  if (!navigator.bluetooth.getDevices) {
+    box.innerHTML = `<div class="card" style="background:var(--bg);margin:0">
+      <b>ให้ Chrome จำเครื่องพิมพ์ (ไม่ต้องค้นหาใหม่ทุกครั้งที่เปิดแอป)</b>
+      <ol class="small" style="margin:6px 0 0 18px;padding:0;line-height:1.7">
+        <li>เปิด Chrome พิมพ์ในช่องที่อยู่ <b>chrome://flags</b></li>
+        <li>ค้นหา <b>Web Bluetooth new permissions backend</b></li>
+        <li>เปลี่ยนเป็น <b>Enabled</b> แล้วกด <b>Relaunch</b></li>
+        <li>เปิดแอปนี้ กด "ค้นหาเครื่องพิมพ์" เลือกเครื่องพิมพ์อีกครั้ง — ครั้งต่อไปจะต่อให้เอง</li>
+      </ol>
+      <button class="btn" id="cpFlag" style="margin-top:8px">คัดลอก chrome://flags/#enable-web-bluetooth-new-permissions-backend</button></div>`;
+    const cp = $('#cpFlag', box);
+    if (cp) cp.onclick = async () => {
+      try { await navigator.clipboard.writeText('chrome://flags/#enable-web-bluetooth-new-permissions-backend'); toast('คัดลอกแล้ว — วางในช่องที่อยู่ของ Chrome'); }
+      catch (x) { toast('คัดลอกไม่ได้ — พิมพ์ chrome://flags เอง', true); }
+    };
+    return;
+  }
   let devs = [];
   try { devs = await navigator.bluetooth.getDevices(); } catch (x) {}
   const cur = store.get('bleName', '');
