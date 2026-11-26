@@ -2,6 +2,15 @@
 (() => {
 'use strict';
 
+/* ---- รองรับ WebView รุ่นเก่า (SUNMI Android 7 ฯลฯ) ---- */
+if (typeof window.AbortController === 'undefined') {
+  window.AbortController = function () { this.signal = { aborted: false, addEventListener() {}, removeEventListener() {} }; };
+  window.AbortController.prototype.abort = function () { this.signal.aborted = true; };
+}
+if (!Object.fromEntries) Object.fromEntries = (it) => { const o = {}; for (const [k, v] of it) o[k] = v; return o; };
+if (!Promise.prototype.finally) {
+  Promise.prototype.finally = function (f) { return this.then((v) => Promise.resolve(f()).then(() => v), (e) => Promise.resolve(f()).then(() => { throw e; })); };
+}
 const CFG = window.POS_CONFIG || {};
 const NATIVE = window.PBDNative || null;   // มีเมื่อเปิดในแอป PBD POS (APK)
 // ไฟล์ตั้งค่าเก่าค้างในแคช (ไม่มี API_URL) → ล้างแคช/service worker แล้วโหลดใหม่ 1 ครั้ง
@@ -124,10 +133,10 @@ async function api(action, payload = {}) {
   const t = setTimeout(() => ctrl.abort(), 45000);
   try {
     const body = JSON.stringify(Object.assign({ pos: true, action, token: S.session && S.session.token }, payload));
-    const res = await fetch(CFG.API_URL, {
+    const res = await Promise.race([fetch(CFG.API_URL, {
       method: 'POST', body, redirect: 'follow', signal: ctrl.signal,
       headers: { 'Content-Type': 'text/plain;charset=utf-8' }
-    });
+    }), new Promise((_, rej) => setTimeout(() => { const e = new Error('timeout'); e.name = 'AbortError'; rej(e); }, 46000))]);   // WebView เก่ายกเลิก fetch ไม่ได้
     const j = await res.json();
     if (!j.ok) { const e = new Error(j.error || 'เกิดข้อผิดพลาด'); e.auth = j.auth; throw e; }
     return j;

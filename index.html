@@ -209,12 +209,18 @@ textarea.inp{resize:vertical;min-height:70px}
 .toast.err{background:var(--red);color:#fff}
 
 .login{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:24px;text-align:center}
-.loginver{position:fixed;left:0;right:0;bottom:calc(env(safe-area-inset-bottom,0px) + 14px);text-align:center;color:var(--mut);font-size:12px;opacity:.7}
+.loginver{position:fixed;left:0;right:0;bottom:14px;bottom:calc(env(safe-area-inset-bottom,0px) + 14px);text-align:center;color:var(--mut);font-size:12px;opacity:.7}
 .login .logo{width:84px;height:84px;border-radius:22px}
 .linebtn{background:#06C755;color:#fff;border-radius:14px;padding:14px 22px;font-weight:700;font-size:16px;min-width:260px}
 #hamBtn{position:relative}
 #hamBtn .nb{position:absolute;top:0;right:-4px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#dc2626;color:#fff;font-size:11px;font-weight:700;line-height:18px;text-align:center}
 nav .nb{position:absolute;top:4px;left:calc(50% + 6px);min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#dc2626;color:#fff;font-size:11px;font-weight:700;line-height:18px;text-align:center}
+/* เบราว์เซอร์/WebView รุ่นเก่า (เช่น SUNMI Android 7) ไม่รู้จัก aspect-ratio */
+@supports not (aspect-ratio:1){
+.grid:not(.lst) .item .pimg{height:30vw;max-height:220px}
+.idcam,.scanbox{height:62vh}
+.idframe{height:34vw}
+}
 </style>
 </head>
 <body>
