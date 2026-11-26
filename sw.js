@@ -1,6 +1,6 @@
 // PBD POS service worker — ทำให้เปิดหน้าขายได้แม้ไม่มีเน็ต
 // เปลี่ยนเลขเวอร์ชันนี้ทุกครั้งที่อัปโหลดไฟล์ใหม่ เพื่อให้เครื่องพนักงานรับเวอร์ชันใหม่เร็วขึ้น
-const VERSION = 'pbd-pos-v2.9.5';
+const VERSION = 'pbd-pos-v2.9.6';
 
 const SHELL = ['./', './index.html', './app.js', './qr.js', './config.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 const LIBS = [
@@ -51,10 +51,27 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
-  // stale-while-revalidate: ใช้ของในเครื่องก่อน แล้วอัปเดตเบื้องหลัง
+  const c0 = caches.open(VERSION);
+  // ไฟล์ของแอปเอง (app.js, config.js ฯลฯ): เอาจากเน็ตก่อน (ได้รุ่นใหม่ทันที) · เน็ตช้า/หลุดเกิน 4 วิ ใช้ของในเครื่อง
+  if (u.origin === self.location.origin) {
+    e.respondWith((async () => {
+      const c = await c0;
+      const hit = c.match(req, { ignoreSearch: true });
+      const net = fetch(req).then((res) => { if (res && res.ok) c.put(req, res.clone()); return res; });
+      const slow = new Promise((r) => setTimeout(r, 4000)).then(() => hit);
+      try {
+        const r = await Promise.race([net, slow]);
+        return r || (await net);
+      } catch (x) {
+        return (await hit) || Response.error();
+      }
+    })());
+    return;
+  }
+  // ไลบรารีภายนอก: ใช้ของในเครื่องก่อน แล้วอัปเดตเบื้องหลัง
   e.respondWith((async () => {
-    const c = await caches.open(VERSION);
-    const hit = await c.match(req, { ignoreSearch: u.origin === self.location.origin });
+    const c = await c0;
+    const hit = await c.match(req);
     const net = fetch(req).then((res) => {
       if (res && (res.ok || res.type === 'opaque')) c.put(req, res.clone());
       return res;

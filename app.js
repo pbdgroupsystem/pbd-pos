@@ -2473,11 +2473,11 @@ function wrapText(ctx, text, maxW) {
   };
   for (const seg of segs) {
     if (ctx.measureText(cur + seg).width <= maxW) { cur += seg; continue; }
-    if (cur.trim()) out.push(cur.trimEnd());
-    cur = seg.trimStart();
+    if (cur.trim()) out.push(cur.replace(/\s+$/, ''));
+    cur = seg.replace(/^\s+/, '');
     if (ctx.measureText(cur).width > maxW) { const s = cur; cur = ''; pushLong(s); }
   }
-  if (cur.trim() || !out.length) out.push(cur.trimEnd());
+  if (cur.trim() || !out.length) out.push(cur.replace(/\s+$/, ''));
   return out;
 }
 
