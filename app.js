@@ -4,6 +4,18 @@
 
 const CFG = window.POS_CONFIG || {};
 const NATIVE = window.PBDNative || null;   // มีเมื่อเปิดในแอป PBD POS (APK)
+// ไฟล์ตั้งค่าเก่าค้างในแคช (ไม่มี API_URL) → ล้างแคช/service worker แล้วโหลดใหม่ 1 ครั้ง
+if (!CFG.API_URL) {
+  try {
+    if (!sessionStorage.getItem('pbdHeal')) {
+      sessionStorage.setItem('pbdHeal', '1');
+      Promise.all([
+        'serviceWorker' in navigator ? navigator.serviceWorker.getRegistrations().then((rs) => Promise.all(rs.map((r) => r.unregister()))) : 0,
+        window.caches ? caches.keys().then((ks) => Promise.all(ks.map((k) => caches.delete(k)))) : 0
+      ]).catch(() => {}).then(() => location.replace(location.pathname + '?r=' + Date.now()));
+    }
+  } catch (x) { /* ไม่มี sessionStorage */ }
+}
 { const v = document.getElementById('loginVer'); if (v) v.textContent = 'PBD POS v' + (CFG.APP_VERSION || ''); }
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
