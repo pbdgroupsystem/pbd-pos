@@ -1567,6 +1567,7 @@ function renderSettings(v) {
       <label class="f">วิธีพิมพ์</label>
       <select class="inp" id="pm">
         <option value="none">ไม่พิมพ์ (ใช้แชร์รูปเมื่อต้องการ)</option>
+        <option value="sys">เครื่องพิมพ์ในตัว SUNMI / พิมพ์ผ่านระบบ Android</option>
         <option value="ble">Bluetooth ตรงจากแอป (Android + Chrome, เครื่อง BLE)</option>
         <option value="share">แชร์รูปใบเสร็จไปแอปเครื่องพิมพ์ (iPhone/iPad)</option>
         <option value="relay">ส่งไปพิมพ์ที่เครื่อง SUNMI/Android ผ่านอินเทอร์เน็ต (iPhone/iPad)</option>
@@ -1577,7 +1578,7 @@ function renderSettings(v) {
           <button class="btn" id="rtr" style="flex:none">ค้นหา</button></div>
         <div class="mut small" style="margin-top:6px">เครื่องรับต้องเปิดแอป PBD POS ค้างไว้ และติ๊ก "รับงานพิมพ์จากเครื่องอื่น" ในหน้านี้ของเครื่องนั้น</div>
       </div>
-      ${p.mode === 'ble' ? `<label class="row" style="margin-top:12px"><input type="checkbox" id="rcv" ${p.recv ? 'checked' : ''}><span>รับงานพิมพ์จากเครื่องอื่น (เช่น iPhone) · เปิดแอปค้างไว้</span></label>
+      ${p.mode === 'ble' || p.mode === 'sys' ? `${p.mode === 'sys' ? '<div class="mut small" style="margin-top:8px">กดพิมพ์ → หน้าพิมพ์ของ Android เปิดขึ้น → เลือกเครื่องพิมพ์ในตัว (เช่น SUNMI / InnerPrinter / Built-in) → กดปุ่มพิมพ์ · ครั้งแรกให้ตั้งขนาดกระดาษ 58 มม. (หรือ 80 มม.)</div>' : ''}<label class="row" style="margin-top:12px"><input type="checkbox" id="rcv" ${p.recv ? 'checked' : ''}><span>รับงานพิมพ์จากเครื่องอื่น (เช่น iPhone) · เปิดแอปค้างไว้</span></label>
       <div id="rcvBox" class="${p.recv ? '' : 'hidden'}"><label class="f">ชื่อเครื่องนี้ (ให้เครื่องอื่นเห็น)</label>
         <input class="inp" id="rcn" maxlength="40" value="${esc(recvName())}"></div>` : ''}
       <label class="f">ขนาดกระดาษ</label>
@@ -2828,6 +2829,7 @@ async function printOps(ops, local, opts = {}) {
     const cv = await drawDoc(ops);
     const mode = local && S.prn.mode === 'relay' ? 'share' : S.prn.mode;
     if (mode === 'none' || mode === 'share') { await shareCanvas(cv, `pbd-${Date.now()}.png`); return true; }
+    if (mode === 'sys') { await printSystem(cv); return true; }
     const bytes = canvasToEscPos(cv);
     toast('กำลังพิมพ์…');
     await bleWrite(bytes);
@@ -2839,6 +2841,28 @@ async function printOps(ops, local, opts = {}) {
   } finally { printing = false; }
 }
 const printBill = (b) => printOps(receiptOps(b));
+
+/** พิมพ์ผ่านระบบพิมพ์ของ Android (SUNMI มีบริการพิมพ์ของเครื่องพิมพ์ในตัวให้เลือก) — ส่งรูปใบเสร็จขนาดหน้ากระดาษจริง */
+async function printSystem(cv) {
+  const url = cv.toDataURL('image/png');
+  let box = document.getElementById('printArea');
+  if (!box) { box = document.createElement('div'); box.id = 'printArea'; document.body.appendChild(box); }
+  const mm = S.prn.paper === 80 ? 80 : 58;
+  let st = document.getElementById('printCss');
+  if (!st) { st = document.createElement('style'); st.id = 'printCss'; document.head.appendChild(st); }
+  st.textContent = `#printArea{display:none}
+@media print{@page{size:${mm}mm ${Math.ceil(cv.height / cv.width * mm) + 4}mm;margin:0}
+html,body{background:#fff!important;margin:0!important;padding:0!important}
+body>*:not(#printArea){display:none!important}
+#printArea{display:block!important}#printArea img{display:block;width:${mm}mm;height:auto}}`;
+  box.innerHTML = '';
+  const im = new Image();
+  im.src = url;
+  box.appendChild(im);
+  await new Promise((r) => { if (im.complete) r(); else { im.onload = r; im.onerror = r; } });
+  window.print();
+  setTimeout(() => { box.innerHTML = ''; }, 1500);
+}
 
 /* ---------- ส่งงานพิมพ์ข้ามเครื่อง (iPhone/iPad → เครื่อง SUNMI/Android ที่เปิด PBD POS ค้างไว้) ---------- */
 // รูปโลโก้/QR ไม่ส่งไปด้วย: ส่งเป็นชื่ออ้างอิง แล้วเครื่องรับใช้รูปจากตั้งค่าร้านของตัวเอง (ข้อมูลเล็ก ส่งเร็ว)
