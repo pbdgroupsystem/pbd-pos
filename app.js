@@ -271,6 +271,8 @@ async function syncNow(manual) {
 
 /* ---------- login ---------- */
 async function startLogin() {
+  // ในแอป Android (APK): ล็อกอิน LINE ใน WebView ไม่ได้ → เปิดแอป LINE ให้กด "อนุญาต" แล้วแอปนี้เข้าสู่ระบบให้เอง (ใช้ระบบเดียวกับสแกน QR)
+  if (NATIVE) return startQrLogin(true);
   const msg = $('#loginMsg');
   if (!navigator.onLine) { msg.textContent = 'ต้องต่ออินเทอร์เน็ตเพื่อเข้าสู่ระบบ'; return; }
   if (typeof liff === 'undefined') { msg.textContent = 'โหลดระบบ LINE ไม่ได้ ลองรีเฟรชหน้า'; return; }
@@ -342,7 +344,7 @@ function drawQr(canvas, text) {
   x.fillStyle = '#fff'; x.fillRect(0, 0, canvas.width, canvas.height); x.fillStyle = '#000';
   for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (m[r][c]) x.fillRect((c + q) * s, (r + q) * s, s, s);
 }
-async function startQrLogin() {
+async function startQrLogin(external) {
   const msg = $('#loginMsg'), box = $('#qrBox');
   if (!navigator.onLine) { msg.textContent = 'ต้องต่ออินเทอร์เน็ตเพื่อเข้าสู่ระบบ'; return; }
   stopQr(); msg.textContent = 'กำลังสร้าง QR…';
@@ -353,6 +355,11 @@ async function startQrLogin() {
     box.classList.remove('hidden'); msg.textContent = '';
     drawQr($('#qrCv'), url);
     $('#qrPin').textContent = j.code.slice(-4);
+    if (external === true) {
+      msg.textContent = 'กำลังเปิด LINE… กด "อนุญาต" ใน LINE (รหัสต้องตรงกับด้านล่าง) แล้วกลับมาที่แอปนี้';
+      // intent:// → ให้ Android เปิดลิงก์ LIFF ด้วยแอป LINE (หรือเบราว์เซอร์ถ้าไม่มี LINE) นอกแอปนี้
+      location.href = `intent://liff.line.me/${CFG.LIFF_ID}?pair=${j.code}#Intent;scheme=https;action=android.intent.action.VIEW;end`;
+    }
     const tick = async () => {
       if (!QR || QR.code !== j.code) return;
       const left = Math.max(0, Math.round((QR.end - Date.now()) / 1000));
