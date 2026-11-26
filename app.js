@@ -25,7 +25,7 @@ if (!CFG.API_URL) {
     }
   } catch (x) { /* ไม่มี sessionStorage */ }
 }
-{ const v = document.getElementById('loginVer'); if (v) v.textContent = 'PBD POS v' + (CFG.APP_VERSION || ''); }
+{ const v = document.getElementById('loginVer'); if (v) v.textContent = 'PBD POS v' + (CFG.APP_VERSION || '') + (window.PBDNative ? ' · แอป Android · WebView ' + ((navigator.userAgent.match(/Chrome\/(\d+)/) || [])[1] || '?') : ''); }
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
