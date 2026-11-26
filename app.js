@@ -3,6 +3,7 @@
 'use strict';
 
 const CFG = window.POS_CONFIG || {};
+const NATIVE = window.PBDNative || null;   // มีเมื่อเปิดในแอป PBD POS (APK)
 { const v = document.getElementById('loginVer'); if (v) v.textContent = 'PBD POS v' + (CFG.APP_VERSION || ''); }
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
@@ -43,6 +44,8 @@ const S = {
     const p = Object.assign({ mode: /Android/i.test(navigator.userAgent) ? 'ble' : 'share', paper: 58, auto: false, chunk: 100 }, store.get('prn_bak', {}),
       store.get('prn', {}));
     if (p.mode === 'rawbt') p.mode = 'ble';   // เลิกใช้ RawBT แล้ว → Bluetooth ตรงจากแอป
+    // เปิดในแอป PBD POS (APK) ครั้งแรก → ใช้เครื่องพิมพ์ของแอป
+    if (window.PBDNative && !p.nativeInit) { p.mode = 'app'; p.nativeInit = 1; }
     delete p.ws;
     return p;
   })(),
@@ -1566,6 +1569,7 @@ function renderSettings(v) {
     <div class="card"><h3 style="font-size:16px">เครื่องพิมพ์ใบเสร็จ</h3>
       <label class="f">วิธีพิมพ์</label>
       <select class="inp" id="pm">
+        ${NATIVE ? '<option value="app">เครื่องพิมพ์ของแอป PBD POS (SUNMI ในตัว / Bluetooth) · แนะนำ</option>' : ''}
         <option value="none">ไม่พิมพ์ (ใช้แชร์รูปเมื่อต้องการ)</option>
         <option value="sys">เครื่องพิมพ์ในตัว SUNMI / พิมพ์ผ่านระบบ Android</option>
         <option value="ble">Bluetooth ตรงจากแอป (Android + Chrome, เครื่อง BLE)</option>
@@ -1578,7 +1582,11 @@ function renderSettings(v) {
           <button class="btn" id="rtr" style="flex:none">ค้นหา</button></div>
         <div class="mut small" style="margin-top:6px">เครื่องรับต้องเปิดแอป PBD POS ค้างไว้ และติ๊ก "รับงานพิมพ์จากเครื่องอื่น" ในหน้านี้ของเครื่องนั้น</div>
       </div>
-      ${p.mode === 'ble' || p.mode === 'sys' ? `${p.mode === 'sys' ? '<div class="mut small" style="margin-top:8px">กดพิมพ์ → หน้าพิมพ์ของ Android เปิดขึ้น → เลือกเครื่องพิมพ์ในตัว (เช่น SUNMI / InnerPrinter / Built-in) → กดปุ่มพิมพ์ · ครั้งแรกให้ตั้งขนาดกระดาษ 58 มม. (หรือ 80 มม.)</div>' : ''}<label class="row" style="margin-top:12px"><input type="checkbox" id="rcv" ${p.recv ? 'checked' : ''}><span>รับงานพิมพ์จากเครื่องอื่น (เช่น iPhone) · เปิดแอปค้างไว้</span></label>
+      ${p.mode === 'app' ? `<div style="margin-top:10px"><label class="f">เครื่องพิมพ์</label>
+        <div class="row" style="gap:8px"><select class="inp" id="nprn" style="flex:1"></select><button class="btn" id="nrf" style="flex:none">รีเฟรช</button></div>
+        <div class="row" style="gap:8px;margin-top:8px"><button class="btn sp" id="nbt">อนุญาต Bluetooth</button><button class="btn sp" id="nbs">จับคู่เครื่องพิมพ์ใหม่</button></div>
+        <div class="mut small" style="margin-top:6px">SUNMI: เลือก "เครื่องพิมพ์ในตัว SUNMI" · เครื่องพกพา (เช่น MP210): จับคู่ใน Bluetooth ของ Android ก่อน แล้วกดรีเฟรช</div></div>` : ''}
+      ${p.mode === 'ble' || p.mode === 'sys' || p.mode === 'app' ? `${p.mode === 'sys' ? '<div class="mut small" style="margin-top:8px">กดพิมพ์ → หน้าพิมพ์ของ Android เปิดขึ้น → เลือกเครื่องพิมพ์ในตัว (เช่น SUNMI / InnerPrinter / Built-in) → กดปุ่มพิมพ์ · ครั้งแรกให้ตั้งขนาดกระดาษ 58 มม. (หรือ 80 มม.)</div>' : ''}<label class="row" style="margin-top:12px"><input type="checkbox" id="rcv" ${p.recv ? 'checked' : ''}><span>รับงานพิมพ์จากเครื่องอื่น (เช่น iPhone) · เปิดแอปค้างไว้</span></label>
       <div id="rcvBox" class="${p.recv ? '' : 'hidden'}"><label class="f">ชื่อเครื่องนี้ (ให้เครื่องอื่นเห็น)</label>
         <input class="inp" id="rcn" maxlength="40" value="${esc(recvName())}"></div>` : ''}
       <label class="f">ขนาดกระดาษ</label>
@@ -1611,6 +1619,7 @@ function renderSettings(v) {
   $('#bleC', v).onclick = async () => { try { await bleConnect(); toast('เชื่อมต่อเครื่องพิมพ์แล้ว'); } catch (e) { toast(e.message, true); } bleStatus(); bleKnown(v); };
   bleStatus();
   if (p.mode === 'ble') bleKnown(v);
+  if (p.mode === 'app') nativePrinterUi(v);
   const rcv = $('#rcv', v);
   if (rcv) rcv.onchange = (e) => { p.recv = e.target.checked; savePrn(); recvLoop(); render(); };
   const rcn = $('#rcn', v);
@@ -2801,6 +2810,7 @@ async function bleWrite(bytes) {
 
 /* ---------- print / share ---------- */
 async function shareCanvas(cv, name) {
+  if (NATIVE && NATIVE.shareImage) { NATIVE.shareImage(cv.toDataURL('image/png'), name); return; }
   const blob = await new Promise((r) => cv.toBlob(r, 'image/png'));
   const file = new File([blob], name, { type: 'image/png' });
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -2830,6 +2840,12 @@ async function printOps(ops, local, opts = {}) {
     const mode = local && S.prn.mode === 'relay' ? 'share' : S.prn.mode;
     if (mode === 'none' || mode === 'share') { await shareCanvas(cv, `pbd-${Date.now()}.png`); return true; }
     if (mode === 'sys') { await printSystem(cv); return true; }
+    if (mode === 'app') {
+      toast('กำลังพิมพ์…');
+      await nativePrint(canvasToEscPos(cv));
+      toast('ส่งไปเครื่องพิมพ์แล้ว');
+      return true;
+    }
     const bytes = canvasToEscPos(cv);
     toast('กำลังพิมพ์…');
     await bleWrite(bytes);
@@ -2841,6 +2857,52 @@ async function printOps(ops, local, opts = {}) {
   } finally { printing = false; }
 }
 const printBill = (b) => printOps(receiptOps(b));
+
+/* ---------- แอป PBD POS (APK): เครื่องพิมพ์ SUNMI ในตัว / Bluetooth SPP ผ่าน window.PBDNative ---------- */
+const NCB = {};
+window.PBDNativeCb = (id, ok, msg) => { const c = NCB[id]; if (c) { delete NCB[id]; if (ok) c.res(); else c.rej(new Error(msg || 'พิมพ์ไม่ได้')); } };
+window.PBDNativeEvent = (k, v) => { if (k === 'bt' && S.view === 'settings') render(); };
+function b64(u8) {
+  let s = '';
+  for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+function nativePrinters() { try { return JSON.parse(NATIVE.printers()) || []; } catch (x) { return []; } }
+function nativeInfo() { try { return JSON.parse(NATIVE.info()) || {}; } catch (x) { return {}; } }
+function nativePrint(bytes) {
+  const p = S.prn;
+  if (!p.ntarget) {   // ยังไม่ได้เลือก: ใช้ SUNMI ในตัวถ้ามี
+    const l = nativePrinters(), sm = l.find((x) => x.kind === 'sunmi');
+    if (sm) { p.ntarget = sm.id; p.ntargetName = sm.name; savePrn(); }
+  }
+  if (!p.ntarget) return Promise.reject(new Error('ยังไม่ได้เลือกเครื่องพิมพ์ — ไปที่ ตั้งค่า › เครื่องพิมพ์ใบเสร็จ'));
+  const id = 'p' + Date.now() + Math.random().toString(36).slice(2, 6);
+  return new Promise((res, rej) => {
+    NCB[id] = { res, rej };
+    NATIVE.print(id, p.ntarget, b64(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)), !!p.slow);
+    setTimeout(() => { if (NCB[id]) { delete NCB[id]; rej(new Error('เครื่องพิมพ์ไม่ตอบสนอง')); } }, 90000);
+  });
+}
+function nativePrinterUi(v) {
+  const p = S.prn, sel = $('#nprn', v);
+  if (!sel) return;
+  const fill = () => {
+    const l = nativePrinters(), inf = nativeInfo();
+    if (!p.ntarget) { const sm = l.find((x) => x.kind === 'sunmi'); if (sm) { p.ntarget = sm.id; p.ntargetName = sm.name; savePrn(); } }
+    const has = l.some((x) => x.id === p.ntarget);
+    sel.innerHTML = (l.length ? '' : '<option value="">ไม่พบเครื่องพิมพ์ — จับคู่ Bluetooth ก่อน</option>')
+      + (p.ntarget && !has ? `<option value="${esc(p.ntarget)}">${esc(p.ntargetName || p.ntarget)} (ไม่พบตอนนี้)</option>` : '')
+      + l.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}${x.kind === 'bt' ? ' · Bluetooth' : ''}</option>`).join('');
+    sel.value = p.ntarget || (l[0] ? l[0].id : '');
+    const nb = $('#nbt', v); if (nb) nb.classList.toggle('hidden', inf.bt !== false);
+  };
+  sel.onchange = () => { const o = sel.options[sel.selectedIndex]; p.ntarget = sel.value; p.ntargetName = o ? o.textContent : ''; savePrn(); };
+  $('#nrf', v).onclick = fill;
+  $('#nbt', v).onclick = () => NATIVE.requestBluetooth();
+  $('#nbs', v).onclick = () => NATIVE.openBluetoothSettings();
+  fill();
+  setTimeout(fill, 1200);   // บริการ SUNMI อาจเชื่อมต่อช้ากว่าหน้าเว็บเล็กน้อย
+}
 
 /** พิมพ์ผ่านระบบพิมพ์ของ Android (SUNMI มีบริการพิมพ์ของเครื่องพิมพ์ในตัวให้เลือก) — ส่งรูปใบเสร็จขนาดหน้ากระดาษจริง */
 async function printSystem(cv) {
@@ -2913,7 +2975,7 @@ function pqAdd(job) {
   return true;
 }
 function pqRefresh() { renderBadge(); if (S.view === 'printq') render(); else renderSide(); }
-const canAutoPrint = () => S.prn.mode === 'ble';
+const canAutoPrint = () => S.prn.mode === 'ble' || S.prn.mode === 'app';
 async function pqPrint(id, auto) {
   const j = S.pq.find((x) => x.id === id);
   if (!j) return false;
@@ -2977,7 +3039,7 @@ function renderPrintQ(v) {
       <span class="small" style="color:${S.prn.recv ? 'var(--ok)' : 'var(--mut)'}">${S.prn.recv ? '● รับงานอยู่' + (canAutoPrint() ? ' · พิมพ์อัตโนมัติ' : '') : 'ปิดรับงาน'}</span></div>
     ${S.prn.recv && !canAutoPrint() ? '<div class="banner"><span class="sp">ยังพิมพ์อัตโนมัติไม่ได้ — ต้องแตะพิมพ์ทีละงาน · เปิด "พิมพ์อัตโนมัติไม่ต้องแตะ" ที่ ตั้งค่า › เครื่องพิมพ์ใบเสร็จ</span></div>' : ''}
     <div class="chips">${chip('all', 'ทั้งหมด', all.length)}${chip('wait', 'รอพิมพ์', nw)}${chip('done', 'พิมพ์แล้ว', all.length - nw)}</div>
-    ${nw > 1 && S.prn.mode === 'ble' ? `<button class="btn pri block" id="pqAll" style="margin-bottom:10px">พิมพ์ที่รอทั้งหมด (${nw})</button>` : ''}
+    ${nw > 1 && canAutoPrint() ? `<button class="btn pri block" id="pqAll" style="margin-bottom:10px">พิมพ์ที่รอทั้งหมด (${nw})</button>` : ''}
     <div class="card list">${list.length ? list.map((j) => `
       <div class="li">
         <div class="sp"><div class="num">${hm(j.at)} · ${esc(j.from)}</div>

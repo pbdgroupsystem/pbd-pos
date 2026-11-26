@@ -1,0 +1,62 @@
+name: Android APK
+
+on:
+  push:
+    branches: [main]
+    paths: ['android/**', '.github/workflows/android.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Signing key
+        env:
+          KS: ${{ secrets.PBD_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS" ]; then
+            echo "$KS" | base64 -d > "$RUNNER_TEMP/pbd.jks"
+            echo "PBD_KEYSTORE_FILE=$RUNNER_TEMP/pbd.jks" >> "$GITHUB_ENV"
+            echo "SIGN_NOTE=เซ็นด้วยกุญแจ PBD POS (อัปเดตทับของเดิมได้)" >> "$GITHUB_ENV"
+          else
+            echo "SIGN_NOTE=ยังไม่ได้ตั้งกุญแจเซ็นแอป (PBD_KEYSTORE_B64) — รุ่นนี้ติดตั้งทับรุ่นอื่นไม่ได้ ต้องถอนของเดิมก่อน" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build APK
+        working-directory: android
+        env:
+          APP_VERSION_CODE: ${{ github.run_number }}
+          APP_VERSION_NAME: 1.0.${{ github.run_number }}
+          PBD_KEYSTORE_PASS: ${{ secrets.PBD_KEYSTORE_PASS }}
+        run: |
+          set -o pipefail
+          sh ./gradlew --no-daemon --stacktrace assembleRelease 2>&1 | tee "$RUNNER_TEMP/build.log"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk pbd-pos.apk
+          printf 'ดาวน์โหลด pbd-pos.apk แล้วติดตั้งบนเครื่อง Android / SUNMI\n\n%s\n\ncommit %s\n' "$SIGN_NOTE" "${GITHUB_SHA::7}" > notes.txt
+          gh release delete apk-build-log -y --cleanup-tag || true
+          gh release create "apk-v1.0.${{ github.run_number }}" pbd-pos.apk \
+            --title "PBD POS Android 1.0.${{ github.run_number }}" --notes-file notes.txt --latest
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          { echo "Run #${{ github.run_number }} · commit ${GITHUB_SHA::7}"; echo '```'; grep -E "error:|FAILURE|What went wrong|Could not|> " "$RUNNER_TEMP/build.log" | head -80; echo '---'; tail -c 30000 "$RUNNER_TEMP/build.log"; echo '```'; } > fail.txt 2>/dev/null || echo "no log" > fail.txt
+          gh release delete apk-build-log -y --cleanup-tag || true
+          gh release create apk-build-log --prerelease --title "APK build failed #${{ github.run_number }}" --notes-file fail.txt

@@ -1,0 +1,48 @@
+plugins {
+    id 'com.android.application' version '9.3.1'
+}
+
+// เวอร์ชันแอป: ส่งมาจาก GitHub Actions (APP_VERSION_CODE / APP_VERSION_NAME) หรือใช้ค่าตั้งต้น
+def vCode = (System.getenv('APP_VERSION_CODE') ?: '1') as Integer
+def vName = System.getenv('APP_VERSION_NAME') ?: '1.0.0'
+def ks = System.getenv('PBD_KEYSTORE_FILE')
+
+android {
+    namespace 'th.pbd.pos'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'th.pbd.pos'
+        minSdk 25
+        targetSdk 34
+        versionCode vCode
+        versionName vName
+    }
+
+    signingConfigs {
+        release {
+            if (ks) {
+                storeFile file(ks)
+                storePassword System.getenv('PBD_KEYSTORE_PASS') ?: 'pbdpos'
+                keyAlias System.getenv('PBD_KEY_ALIAS') ?: 'pbdpos'
+                keyPassword System.getenv('PBD_KEYSTORE_PASS') ?: 'pbdpos'
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig ks ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+dependencies {
+    implementation 'com.sunmi:printerlibrary:1.0.18'
+}
