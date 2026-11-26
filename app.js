@@ -52,7 +52,8 @@ const hm = (ms) => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(
 const dt = (ms) => { const d = new Date(ms); return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear() + 543} ${hm(ms)}`; };
 const sbaht = (n) => (n < 0 ? '-' : n > 0 ? '+' : '') + baht(Math.abs(n));
 const ROLE_TH = { sales: 'พนักงานขาย', Sales: 'พนักงานขาย', Staff: 'พนักงานขาย', Admin: 'ผู้ดูแลระบบ', BranchAdmin: 'แอดมินประจำสาขา', BranchManager: 'ผู้จัดการสาขา', TeamLead: 'หัวหน้าทีม' };
-const METHOD = { cash: 'เงินสด', transfer: 'โอน/QR', other: 'อื่นๆ' };
+const METHOD = { cash: 'เงินสด', transfer: 'โอนเงิน', qr: 'QR พร้อมเพย์', other: 'อื่นๆ' };
+const OTHER_PAY = ['บัตรเครดิต/เดบิต', 'เช็ค', 'บัตรกำนัล/คูปอง', 'วอลเล็ต (TrueMoney ฯลฯ)'];
 
 function randomId(n) {
   const a = new Uint8Array(n); crypto.getRandomValues(a);
@@ -878,7 +879,7 @@ function manualCollect() {
 const openShift = (loc = S.loc) => S.shifts.find((s) => s.loc === loc && !s.closeAt);
 function shiftTotals(s) {
   const bs = S.bills.filter((b) => b.shiftId === s.id && !b.void);
-  const by = { cash: 0, transfer: 0, other: 0 };
+  const by = { cash: 0, transfer: 0, qr: 0, other: 0 };
   bs.forEach((b) => { by[b.method] = r2((by[b.method] || 0) + b.total); });
   return { bills: bs.length, by, total: r2(bs.reduce((a, b) => a + b.total, 0)), expected: r2((s.openingCash || 0) + by.cash) };
 }
@@ -1170,7 +1171,7 @@ function openPay() {
     <button class="li" id="pcust" style="width:100%;text-align:left;border:1px solid ${needCustomer && !cc && !textCust ? 'var(--warn)' : 'var(--line)'};border-radius:12px;padding:10px 12px">
       <span class="sp"><span class="mut small">ลูกค้า${needCustomer ? ' *' : ''}</span><br>${cc ? esc(custLabel(cc)) : textCust ? esc(textCust) : '<span class="mut">+ เลือก / สร้างลูกค้า</span>'}</span>
       <span class="mut small">${cc || textCust ? 'เปลี่ยน' : ''}</span></button>
-    <div class="seg">${Object.keys(METHOD).map((m) => `<button data-mt="${m}">${METHOD[m]}</button>`).join('')}</div>
+    <div class="seg" style="grid-template-columns:repeat(4,1fr)">${Object.keys(METHOD).map((m) => `<button data-mt="${m}">${METHOD[m]}</button>`).join('')}</div>
     <div id="mbody"></div>
     <label class="f">หมายเหตุ</label><input class="inp" id="note" maxlength="120">
     <button class="btn pri block" id="confirm" style="margin-top:14px">ยืนยัน</button>`);
@@ -1187,13 +1188,22 @@ function openPay() {
       ci.oninput = upd;
       $$('[data-q]', mb).forEach((b) => { b.onclick = () => { ci.value = b.dataset.q; upd(); }; });
     } else if (st.method === 'transfer') {
+      mb.innerHTML = `${st0.payQrLabel ? `<div class="card" style="margin:10px 0;text-align:center"><div class="mut small">โอนเข้าบัญชี</div><div style="white-space:pre-line">${esc(st0.payQrLabel)}</div></div>` : ''}
+        <div style="text-align:center;margin-top:6px"><span class="mut small">ให้ลูกค้าโอนยอด</span><div class="num" style="font-size:30px;color:var(--ok)">${baht(t)}</div></div>
+        <label class="f">อ้างอิงการโอน (ไม่บังคับ) เช่น ชื่อผู้โอน / 4 ตัวท้ายบัญชี / เวลาโอน</label><input class="inp" id="pref" maxlength="60">
+        <div class="mut small" style="text-align:center;margin-top:6px">ตรวจยอดเงินเข้าก่อนกดยืนยัน</div>`;
+    } else if (st.method === 'qr') {
       mb.innerHTML = (st0.payQr ? `<div class="qrbox"><img src="${st0.payQr}" alt="QR รับเงิน"></div>
-          ${st0.payQrLabel ? `<div style="text-align:center">${esc(st0.payQrLabel)}</div>` : ''}`
+          ${st0.payQrLabel ? `<div style="text-align:center;white-space:pre-line">${esc(st0.payQrLabel)}</div>` : ''}`
         : `<div class="mut small">ยังไม่ได้แนบรูป QR รับเงิน (Admin: ตั้งค่า › ตั้งค่าร้านและใบเสร็จ)</div>`) +
-        `<div style="text-align:center;margin-top:6px"><span class="mut small">ให้ลูกค้าโอนยอด</span><div class="num" style="font-size:30px;color:var(--ok)">${baht(t)}</div></div>
+        `<div style="text-align:center;margin-top:6px"><span class="mut small">ให้ลูกค้าสแกนจ่ายยอด</span><div class="num" style="font-size:30px;color:var(--ok)">${baht(t)}</div></div>
          <div class="mut small" style="text-align:center">ตรวจยอดเงินเข้าก่อนกดยืนยัน</div>`;
     } else {
-      mb.innerHTML = `<div class="mut small">ระบุช่องทางในหมายเหตุ เช่น บัตรเครดิต</div>`;
+      mb.innerHTML = `<label class="f">ช่องทางชำระ *</label>
+        <div class="chips" style="flex-wrap:wrap">${OTHER_PAY.map((x) => `<button class="chip ${st.other === x ? 'on' : ''}" data-op="${esc(x)}">${esc(x)}</button>`).join('')}</div>
+        <input class="inp" id="pother" maxlength="60" placeholder="หรือพิมพ์ช่องทางอื่น" value="${esc(st.other && OTHER_PAY.indexOf(st.other) < 0 ? st.other : '')}" style="margin-top:6px">`;
+      $$('[data-op]', mb).forEach((b) => { b.onclick = () => { st.other = b.dataset.op; drawBody(); }; });
+      $('#pother', mb).oninput = (e) => { st.other = e.target.value.trim(); $$('[data-op]', mb).forEach((b) => b.classList.remove('on')); };
     }
   };
   $$('[data-mt]', el).forEach((b) => { b.onclick = () => { st.method = b.dataset.mt; drawBody(); }; });
@@ -1208,10 +1218,17 @@ function openPay() {
       change = r2(cash - t);
     }
     const customer = cc ? custLabel(cc) : textCust;
-    const note = $('#note', el).value.trim();
+    let note = $('#note', el).value.trim();
     if (needCustomer && !customer) return toast('เลือกลูกค้าก่อน', true);
-    if (st.method === 'other' && !note) return toast('ระบุช่องทางชำระในหมายเหตุ', true);
-    createBill({ method: st.method, cash, change, note, customer, cust: cc });
+    let payRef = '';
+    if (st.method === 'other') {
+      if (!st.other) return toast('เลือกช่องทางชำระ', true);
+      payRef = st.other;
+    } else if (st.method === 'transfer') {
+      const pr = $('#pref', el); payRef = pr ? pr.value.trim() : '';
+    }
+    if (payRef) note = (st.method === 'other' ? 'ชำระด้วย ' : 'อ้างอิงโอน: ') + payRef + (note ? ' · ' + note : '');
+    createBill({ method: st.method, cash, change, note, customer, cust: cc, payRef });
   };
 }
 
@@ -1237,7 +1254,7 @@ function createBill(p) {
     id: newBillId(), loc: S.loc, createdAt: Date.now(), sellerId: u.id, sellerName: u.name, device: S.device,
     shiftId: sh ? sh.id : '', type: S.cart.every(isCollect) ? 'COLLECT' : 'SALE', lines,
     subtotal: total, discount: 0, total, balance: cartBalance(), method: p.method,
-    cash: p.cash, change: p.change, note: p.note, customer: p.customer, synced: 0,
+    cash: p.cash, change: p.change, note: p.note, payRef: p.payRef || '', customer: p.customer, synced: 0,
     customerId: p.cust ? p.cust.id : '',
     cust: p.cust ? { name: p.cust.name, phone: p.cust.phone, addr: custAddr(p.cust), code: p.cust.code } : null
   };
@@ -1504,9 +1521,7 @@ function renderShift(v) {
     v.innerHTML = `${banners()}<div class="card"><div class="row"><h3 class="sp">กะที่เปิดอยู่ · ${esc(locName(s.loc))}</h3><span class="mut small">เปิด ${dt(s.openAt)}</span></div>
       <div class="list" style="margin-top:6px">
         <div class="li"><span class="sp">เงินตั้งต้น</span><span class="num">${baht(s.openingCash)}</span></div>
-        <div class="li"><span class="sp">ขายเงินสด</span><span class="num">${baht(t.by.cash)}</span></div>
-        <div class="li"><span class="sp">โอน/QR</span><span class="num">${baht(t.by.transfer)}</span></div>
-        <div class="li"><span class="sp">อื่นๆ</span><span class="num">${baht(t.by.other)}</span></div>
+        ${Object.keys(METHOD).map((m) => `<div class="li"><span class="sp">${m === 'cash' ? 'ขายเงินสด' : METHOD[m]}</span><span class="num">${baht(t.by[m])}</span></div>`).join('')}
         <div class="li"><span class="sp">จำนวนบิล (เครื่องนี้)</span><span class="num">${t.bills}</span></div>
         <div class="li"><b class="sp">เงินสดที่ควรมี</b><b class="num">${baht(t.expected)}</b></div>
       </div>
@@ -2624,9 +2639,10 @@ function receiptOps(b, stIn) {
   }
   ops.push({ t: 'row', l: b.type === 'COLLECT' ? 'รับชำระ' : 'รับเงินวันนี้', r: baht(b.total), bold: true, scale: 1.25 });
   if (b.balance) ops.push({ t: 'row', l: 'ค้างเก็บภายหลัง', r: baht(b.balance), bold: true });
-  ops.push({ t: 'row', l: METHOD[b.method] || b.method, r: b.method === 'cash' ? baht(b.cash) : baht(b.total) });
+  ops.push({ t: 'row', l: (b.method === 'other' && b.payRef) || METHOD[b.method] || b.method, r: b.method === 'cash' ? baht(b.cash) : baht(b.total) });
   if (b.method === 'cash') ops.push({ t: 'row', l: 'เงินทอน', r: baht(b.change) });
-  if (b.note) ops.push({ t: 'text', s: 'หมายเหตุ: ' + b.note, scale: 0.85 });
+  const nt = b.method === 'other' && b.payRef ? (b.note || '').replace('ชำระด้วย ' + b.payRef, '').replace(/^ · /, '') : b.note;
+  if (nt) ops.push({ t: 'text', s: 'หมายเหตุ: ' + nt, scale: 0.85 });
   if (b.void) ops.push({ t: 'text', s: '*** ยกเลิกแล้ว ***', align: 'center', bold: true, scale: 1.2 });
   ops.push({ t: 'hr' });
   ops.push(...multiline(st.footer));
@@ -2649,9 +2665,7 @@ function shiftOps(s, t) {
     { t: 'row', l: 'ปิดกะ', r: s.closeAt ? dt(s.closeAt) : '-', scale: 0.85 },
     { t: 'hr' },
     { t: 'row', l: 'เงินตั้งต้น', r: baht(s.openingCash) },
-    { t: 'row', l: 'ขายเงินสด', r: baht(t.by.cash) },
-    { t: 'row', l: 'โอน/QR', r: baht(t.by.transfer) },
-    { t: 'row', l: 'อื่นๆ', r: baht(t.by.other) },
+    ...Object.keys(METHOD).map((m) => ({ t: 'row', l: m === 'cash' ? 'ขายเงินสด' : METHOD[m], r: baht(t.by[m]) })),
     { t: 'row', l: 'จำนวนบิล', r: String(t.bills) },
     { t: 'hr' },
     { t: 'row', l: 'เงินสดที่ควรมี', r: baht(t.expected), bold: true },
