@@ -1188,10 +1188,7 @@ function openPay() {
       ci.oninput = upd;
       $$('[data-q]', mb).forEach((b) => { b.onclick = () => { ci.value = b.dataset.q; upd(); }; });
     } else if (st.method === 'transfer') {
-      mb.innerHTML = `${st0.payQrLabel ? `<div class="card" style="margin:10px 0;text-align:center"><div class="mut small">โอนเข้าบัญชี</div><div style="white-space:pre-line">${esc(st0.payQrLabel)}</div></div>` : ''}
-        <div style="text-align:center;margin-top:6px"><span class="mut small">ให้ลูกค้าโอนยอด</span><div class="num" style="font-size:30px;color:var(--ok)">${baht(t)}</div></div>
-        <label class="f">อ้างอิงการโอน (ไม่บังคับ) เช่น ชื่อผู้โอน / 4 ตัวท้ายบัญชี / เวลาโอน</label><input class="inp" id="pref" maxlength="60">
-        <div class="mut small" style="text-align:center;margin-top:6px">ตรวจยอดเงินเข้าก่อนกดยืนยัน</div>`;
+      mb.innerHTML = '<div class="mut small" style="text-align:center;margin-top:8px">ตรวจยอดเงินเข้าก่อนกดยืนยัน</div>';
     } else if (st.method === 'qr') {
       mb.innerHTML = (st0.payQr ? `<div class="qrbox"><img src="${st0.payQr}" alt="QR รับเงิน"></div>
           ${st0.payQrLabel ? `<div style="text-align:center;white-space:pre-line">${esc(st0.payQrLabel)}</div>` : ''}`
