@@ -7,6 +7,20 @@ if (typeof window.AbortController === 'undefined') {
   window.AbortController = function () { this.signal = { aborted: false, addEventListener() {}, removeEventListener() {} }; };
   window.AbortController.prototype.abort = function () { this.signal.aborted = true; };
 }
+if (!String.prototype.trimStart) String.prototype.trimStart = function () { return this.replace(/^\s+/, ''); };
+if (!String.prototype.trimEnd) String.prototype.trimEnd = function () { return this.replace(/\s+$/, ''); };
+(() => {   // ตรวจ CSS ที่ WebView เก่าไม่รองรับ → ใส่คลาสให้ CSS สำรองทำงาน
+  const h = document.documentElement;
+  try { if (!(window.CSS && CSS.supports && CSS.supports('top', 'env(safe-area-inset-top)'))) h.classList.add('noenv'); } catch (x) { h.classList.add('noenv'); }
+  try {
+    const d = document.createElement('div');
+    d.style.cssText = 'display:flex;flex-direction:column;row-gap:1px;position:absolute;visibility:hidden';
+    d.appendChild(document.createElement('div')); d.appendChild(document.createElement('div'));
+    document.body.appendChild(d);
+    if (d.scrollHeight !== 1) h.classList.add('nogap');
+    d.parentNode.removeChild(d);
+  } catch (x) { /* ไม่เป็นไร */ }
+})();
 if (!Object.fromEntries) Object.fromEntries = (it) => { const o = {}; for (const [k, v] of it) o[k] = v; return o; };
 if (!Promise.prototype.finally) {
   Promise.prototype.finally = function (f) { return this.then((v) => Promise.resolve(f()).then(() => v), (e) => Promise.resolve(f()).then(() => { throw e; })); };

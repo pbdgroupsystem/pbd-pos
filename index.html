@@ -43,13 +43,13 @@ h1,h2,h3,.num{font-family:Kanit,"IBM Plex Sans Thai",sans-serif;font-weight:600;
 
 /* header */
 header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:8px;
-  padding:calc(env(safe-area-inset-top,0px) + 10px) 12px 10px;background:rgba(18,16,18,.94);
+  padding:10px 12px;padding:calc(env(safe-area-inset-top,0px) + 10px) 12px 10px;background:rgba(18,16,18,.94);
   backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
 .brand{font-family:Kanit;font-weight:600;font-size:18px;letter-spacing:.3px}
 .brand b{color:var(--red)}
 .ham{width:40px;height:40px;display:grid;place-items:center;border-radius:12px;color:var(--tx);flex:none;margin-left:-4px}
 .ham svg{width:24px;height:24px}
-.side{position:fixed;top:0;bottom:0;left:0;width:min(300px,84vw);background:var(--card);z-index:41;transform:translateX(-104%);
+.side{position:fixed;top:0;bottom:0;left:0;width:84vw;max-width:300px;width:min(300px,84vw);background:var(--card);z-index:41;transform:translateX(-104%);
   transition:transform .22s ease;overflow-y:auto;padding:calc(env(safe-area-inset-top,0px) + 14px) 10px calc(var(--safe-b) + 20px);
   border-right:1px solid var(--line);box-shadow:20px 0 40px -20px rgba(0,0,0,.6)}
 .side.open{transform:none}
@@ -58,7 +58,7 @@ header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:8px;
 .side .logout{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;margin-top:8px;padding:14px;border:0;border-radius:14px;
   background:var(--red);color:#fff;font-family:inherit;font-size:16px;font-weight:600}
 .side .logout svg{width:20px;height:20px}
-.side-ov{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:40}
+.side-ov{position:fixed;top:0;right:0;bottom:0;left:0;background:rgba(0,0,0,.55);z-index:40}
 .side .sme{display:flex;align-items:center;gap:10px;padding:6px 8px 14px;border-bottom:1px solid var(--line);margin-bottom:8px}
 .side .si{display:flex;align-items:center;gap:12px;width:100%;padding:12px;border-radius:12px;font-size:16px;text-align:left;color:var(--tx);background:none;border:0;font-family:inherit}
 .side .si.on{background:var(--card2);color:var(--red)}
@@ -73,13 +73,13 @@ header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:8px;
 .ln .qbtn{width:38px;height:38px;border-radius:10px;background:var(--card2);border:1px solid var(--line);color:var(--tx);font-size:18px}
 .ln .qv{min-width:36px;text-align:center;font-family:Kanit;font-size:18px}
 .me{display:flex;align-items:center;gap:9px;min-width:0;background:none;border:0;padding:0;color:inherit;text-align:left;font:inherit}
-:is(.me,.sme) .av{width:38px;height:38px;border-radius:50%;object-fit:cover;flex:none;background:var(--card2);border:2px solid var(--red);
+.me .av,.sme .av{width:38px;height:38px;border-radius:50%;object-fit:cover;flex:none;background:var(--card2);border:2px solid var(--red);
   display:grid;place-items:center;font-family:Kanit;font-weight:600;font-size:16px}
-:is(.me,.sme) .who{display:flex;flex-direction:column;min-width:0;line-height:1.2}
-:is(.me,.sme) .nm{font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:44vw}
+.me .who,.sme .who{display:flex;flex-direction:column;min-width:0;line-height:1.2}
+.me .nm,.sme .nm{font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:44vw}
 .sme .nm{max-width:200px}
-:is(.me,.sme) .sub{font-size:11px;color:var(--mut);white-space:nowrap;font-family:Kanit}
-:is(.me,.sme) .sub b{color:var(--red);font-weight:600}
+.me .sub,.sme .sub{font-size:11px;color:var(--mut);white-space:nowrap;font-family:Kanit}
+.me .sub b,.sme .sub b{color:var(--red);font-weight:600}
 .teambtn{margin-left:auto;display:flex;align-items:center;gap:6px;background:var(--card2);
   border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-weight:600;max-width:46vw;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -168,7 +168,7 @@ label.f{display:block;margin:10px 0 4px;color:var(--mut);font-size:13px}
   padding:10px 12px;margin-bottom:10px;font-size:13px;display:flex;gap:8px;align-items:center}
 
 /* sheet */
-.scrim{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:40;display:flex;align-items:flex-end;justify-content:center}
+.scrim{position:fixed;top:0;right:0;bottom:0;left:0;background:rgba(0,0,0,.6);z-index:40;display:flex;align-items:flex-end;justify-content:center}
 .sheet{width:100%;max-width:560px;max-height:92vh;overflow:auto;background:var(--card);border-radius:20px 20px 0 0;
   padding:16px 16px calc(16px + var(--safe-b));border-top:1px solid var(--line)}
 .sheet .hd{display:flex;align-items:center;margin-bottom:12px}
@@ -203,7 +203,7 @@ textarea.inp{resize:vertical;min-height:70px}
 .kp button{height:64px;border-radius:12px;background:var(--card2);border:1px solid var(--line);font:600 26px Kanit,sans-serif}
 .kp button:active{background:var(--line)}
 .kp .ok{background:var(--ok);border-color:var(--ok);color:#06240f;font-size:20px}
-.toast{position:fixed;left:50%;transform:translateX(-50%);top:calc(env(safe-area-inset-top,0px) + 64px);z-index:60;
+.toast{position:fixed;left:50%;transform:translateX(-50%);top:64px;top:calc(env(safe-area-inset-top,0px) + 64px);z-index:60;
   background:#fff;color:#111;border-radius:12px;padding:10px 16px;font-weight:600;max-width:90vw;
   box-shadow:0 10px 30px rgba(0,0,0,.4);text-align:center}
 .toast.err{background:var(--red);color:#fff}
@@ -221,6 +221,14 @@ nav .nb{position:absolute;top:4px;left:calc(50% + 6px);min-width:18px;height:18p
 .idcam,.scanbox{height:62vh}
 .idframe{height:34vw}
 }
+/* WebView รุ่นเก่า (Chrome < 84) ไม่รองรับ gap ใน flex → เว้นระยะด้วย margin แทน */
+.nogap .row>*+*,.nogap .li>*+*,.nogap .searchrow>*+*,.nogap header>*+*,.nogap .me>*+*,.nogap .sme>*+*,.nogap .si>*+*,
+.nogap .stk>*+*,.nogap .ln>*+*,.nogap .teambtn>*+*,.nogap .imgpick>*+*,.nogap .logout>*+*{margin-left:8px}
+.nogap .chips>*{margin:0 6px 6px 0}
+.nogap .login>*+*{margin-top:16px}
+.nogap #qrBox>*+*{margin-top:10px}
+.nogap .qty>*+*{margin-left:4px}
+.noenv{--safe-b:0px}
 </style>
 </head>
 <body>
